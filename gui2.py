@@ -533,7 +533,7 @@ class MainWindow(QMainWindow):
     sig_log = pyqtSignal(str)
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SB TOOL - FREE")
+        self.setWindowTitle("SB TOOL - TESTER")
         self.setWindowIcon(QIcon("logo.png"))
         self.resize(260, 520)
         self.stop_event = threading.Event()
@@ -826,3 +826,4 @@ if __name__ == "__main__":
     win = MainWindow()
     win.show()
     sys.exit(app.exec_())
+
