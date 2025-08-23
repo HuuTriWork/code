@@ -26,8 +26,8 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 DATA_JSON = "data.json"
 
 THRESHOLDS = {
-    "disconnect.png": 0.85,
-    "confirm.png": 0.85,
+    "disconnect.png": 0.75,
+    "confirm.png": 0.75,
     "home.png": 0.85,
     "map.png": 0.85,
     "scout.png": 0.85,
@@ -43,9 +43,9 @@ THRESHOLDS = {
     "sleep.png": 0.75,
     "back.png": 0.75,
     "camp.png": 0.75,
-    "captcha1.png": 0.85,
-    "captcha2.png": 0.85,
-    "captcha3.png": 0.85,
+    "captcha1.png": 0.75,
+    "captcha2.png": 0.75,
+    "captcha3.png": 0.75,
 }
 
 RANDOM_DELAY_RANGE = (1.5, 2.5)
@@ -920,4 +920,5 @@ if __name__ == "__main__":
     win = MainWindow()
     win.show()
     sys.exit(app.exec_())
+
 
