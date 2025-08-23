@@ -40,9 +40,9 @@ THRESHOLDS = {
     "caves.png": 0.85,
     "go.png": 0.85,
     "investigate.png": 0.85,
-    "sleep.png": 0.80,
-    "back.png": 0.80,
-    "camp.png": 0.80,
+    "sleep.png": 0.75,
+    "back.png": 0.75,
+    "camp.png": 0.75,
     "captcha1.png": 0.85,
     "captcha2.png": 0.85,
     "captcha3.png": 0.85,
@@ -333,7 +333,7 @@ def do_captcha_check(dev: str, log_fn, stop_event: threading.Event) -> bool:
 def try_exit(dev: str, log_fn, stop_event: threading.Event, anti_ban: bool, timeout: float = 5.0):
     pos_exit = wait_for_template(dev, "exit.png", timeout=timeout, stop_event=stop_event)
     if pos_exit:
-        log_fn(f"[{dev}] exit.png found -> exiting current view.")
+        log_fn(f"[{dev}] Exit.")
         perform_tap(dev, *pos_exit, anti_ban)
         wait_or_stop(stop_event, get_delay(anti_ban))
         return True
@@ -583,7 +583,7 @@ class MainWindow(QMainWindow):
     sig_status = pyqtSignal(str, str)
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SB TOOL - TESTER")
+        self.setWindowTitle("Update 23/8/2025")
         self.setWindowIcon(QIcon("logo.png"))
         self.resize(280, 560)
         self.stop_event = threading.Event()
@@ -920,3 +920,4 @@ if __name__ == "__main__":
     win = MainWindow()
     win.show()
     sys.exit(app.exec_())
+
