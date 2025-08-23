@@ -6,7 +6,7 @@ def create_update_notification():
     # Tạo cửa sổ chính
     root = tk.Tk()
     root.title("Thông báo cập nhật")
-    root.geometry("500x500")
+    root.geometry("600x400")
     root.configure(bg="#f0f0f0")
     
     # Đặt cửa sổ luôn ở trên cùng
@@ -74,4 +74,5 @@ def create_update_notification():
 
 if __name__ == "__main__":
     create_update_notification()
+
 
