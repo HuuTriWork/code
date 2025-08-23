@@ -45,55 +45,71 @@ THRESHOLDS = {
     "camp.png": 0.80,
 }
 
-# Anti-ban values
 RANDOM_DELAY_RANGE = (1.5, 2.5)
 RANDOM_OFFSET = 5
-
-# Non-Anti-ban values
 FIXED_DELAY = 1.5
-
 LONG_RECONNECT_WAIT = 30.0
 connected_devices = set()
 
+BLUESTACKS_PORTS = [5555, 5557, 5559, 5561, 5563]
 
-def get_ldplayer_devices():
-    result = subprocess.run([ADB_PATH, "devices"], capture_output=True, text=True)
-    lines = result.stdout.strip().splitlines()[1:]
+def adb_devices_raw():
+    try:
+        result = subprocess.run([ADB_PATH, "devices"], capture_output=True, text=True)
+        lines = result.stdout.strip().splitlines()[1:]
+        parsed = []
+        for line in lines:
+            if not line.strip():
+                continue
+            parts = line.split()
+            if len(parts) >= 2:
+                parsed.append((parts[0], parts[1]))
+            else:
+                parsed.append((parts[0], ""))
+        return parsed
+    except Exception:
+        return []
+
+def try_connect_bluestacks_ports():
+    for p in BLUESTACKS_PORTS:
+        ip_port = f"127.0.0.1:{p}"
+        try:
+            subprocess.run([ADB_PATH, "connect", ip_port], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.2)
+        except Exception:
+            pass
+
+def get_emulator_devices():
+    parsed = adb_devices_raw()
     devices = []
-    for line in lines:
-        if not line.strip():
-            continue
-        parts = line.split()
-        device_id = parts[0]
-        if device_id.startswith("emulator-"):
-            devices.append(device_id)
+    for dev_id, state in parsed:
+        if dev_id.startswith("emulator-") or dev_id.startswith("127.0.0.1:") or dev_id.startswith("localhost:"):
+            devices.append(dev_id)
     return devices
-
 
 def auto_connect(dev):
     if dev in connected_devices:
         return
     try:
-        port_num = int(dev.split("-")[-1]) + 1
-        ip_port = f"127.0.0.1:{port_num}"
-        subprocess.run([ADB_PATH, "connect", ip_port],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        connected_devices.add(dev)
+        if dev.startswith("emulator-"):
+            port_num = int(dev.split("-")[-1]) + 1
+            ip_port = f"127.0.0.1:{port_num}"
+            subprocess.run([ADB_PATH, "connect", ip_port], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.2)
+            connected_devices.add(dev)
+        elif dev.startswith("127.0.0.1:") or dev.startswith("localhost:"):
+            subprocess.run([ADB_PATH, "connect", dev], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.2)
+            connected_devices.add(dev)
     except Exception:
         pass
 
 def adb_tap(dev: str, x: int, y: int):
-    """Performs a standard, non-randomized tap."""
     subprocess.run([ADB_PATH, "-s", dev, "shell", "input", "tap", str(int(x)), str(int(y))],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 def adb_tap_randomized(dev: str, x: int, y: int, offset: int = RANDOM_OFFSET):
-    """Performs a tap with a random pixel offset for anti-ban."""
     rand_x = x + random.randint(-offset, offset)
     rand_y = y + random.randint(-offset, offset)
     subprocess.run([ADB_PATH, "-s", dev, "shell", "input", "tap", str(int(rand_x)), str(int(rand_y))],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
 
 def adb_screencap_img(dev: str) -> Optional[np.ndarray]:
     try:
@@ -105,11 +121,10 @@ def adb_screencap_img(dev: str) -> Optional[np.ndarray]:
         img_array = np.frombuffer(data, np.uint8)
         img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
         if img is not None:
-            cv2.imwrite(os.path.join(CACHE_DIR, f"{dev}.png"), img)
+            cv2.imwrite(os.path.join(CACHE_DIR, f"{dev.replace(':','_')}.png"), img)
         return img
     except Exception:
         return None
-
 
 def load_template(name: str) -> Optional[np.ndarray]:
     path = os.path.join(DATA_DIR, name)
@@ -117,14 +132,12 @@ def load_template(name: str) -> Optional[np.ndarray]:
         return None
     return cv2.imread(path, cv2.IMREAD_COLOR)
 
-
 def match_template(screen: np.ndarray, templ: np.ndarray) -> Tuple[float, Tuple[int, int]]:
     res = cv2.matchTemplate(screen, templ, cv2.TM_CCOEFF_NORMED)
     _, max_val, _, max_loc = cv2.minMaxLoc(res)
     h, w = templ.shape[:2]
     center = (max_loc[0] + w // 2, max_loc[1] + h // 2)
     return max_val, center
-
 
 def find_on_screen(screen: np.ndarray, template_name: str) -> Optional[Tuple[int, int]]:
     templ = load_template(template_name)
@@ -135,7 +148,6 @@ def find_on_screen(screen: np.ndarray, template_name: str) -> Optional[Tuple[int
     if score >= thr:
         return center
     return None
-
 
 def wait_for_template(dev: str, template_name: str, timeout: float = 12.0, interval: float = 0.8, stop_event: threading.Event = None) -> Optional[Tuple[int, int]]:
     t0 = time.time()
@@ -154,7 +166,6 @@ def wait_for_template(dev: str, template_name: str, timeout: float = 12.0, inter
         if stop_event and stop_event.wait(interval):
             return None
     return None
-
 
 def wait_for_any_template(dev: str, names: list, timeout: float = 12.0, interval: float = 0.8, stop_event: threading.Event = None) -> Optional[Tuple[str, Tuple[int, int]]]:
     t0 = time.time()
@@ -175,14 +186,12 @@ def wait_for_any_template(dev: str, names: list, timeout: float = 12.0, interval
             return None
     return None
 
-
 def wait_or_stop(stop_event: threading.Event, seconds: float) -> bool:
     if stop_event:
         return stop_event.wait(seconds)
     else:
         time.sleep(seconds)
         return False
-
 
 def get_delay(anti_ban_enabled: bool, delay_range: Tuple[float, float] = RANDOM_DELAY_RANGE) -> float:
     if anti_ban_enabled:
@@ -195,7 +204,6 @@ def perform_tap(dev:str, x: int, y: int, anti_ban_enabled: bool):
     else:
         adb_tap(dev, x, y)
 
-
 def load_coords() -> dict:
     if not os.path.exists(DATA_JSON):
         return {}
@@ -205,7 +213,6 @@ def load_coords() -> dict:
     except Exception:
         return {}
 
-
 def save_coords(data: dict):
     try:
         with open(DATA_JSON, "w", encoding="utf-8") as f:
@@ -213,7 +220,6 @@ def save_coords(data: dict):
         return True
     except Exception:
         return False
-
 
 def click_center(dev: str, log_fn, stop_event: threading.Event, anti_ban: bool):
     img = adb_screencap_img(dev)
@@ -225,7 +231,6 @@ def click_center(dev: str, log_fn, stop_event: threading.Event, anti_ban: bool):
     perform_tap(dev, cx, cy, anti_ban)
     if wait_or_stop(stop_event, get_delay(anti_ban)):
         return
-
 
 def reset_to_home(dev: str, log_fn, stop_event: threading.Event, anti_ban: bool):
     screen = adb_screencap_img(dev)
@@ -252,7 +257,6 @@ def reset_to_home(dev: str, log_fn, stop_event: threading.Event, anti_ban: bool)
         else:
             log_fn(f"[{dev}] Could not find home icon after exiting to map.")
 
-
 def go_to_coord_and_scout(dev: str, log_fn, stop_event: threading.Event, anti_ban: bool):
     coords = load_coords()
     info = coords.get(dev)
@@ -274,11 +278,10 @@ def go_to_coord_and_scout(dev: str, log_fn, stop_event: threading.Event, anti_ba
     log_fn(f"[{dev}] Scout button not found.")
     return False
 
-
 def ensure_selected(dev: str, log_fn, stop_event: threading.Event, anti_ban: bool, retries: int = 3):
     for i in range(retries):
-        if stop_event.is_set(): return False
-
+        if stop_event.is_set():
+            return False
         wait_or_stop(stop_event, get_delay(anti_ban, (0.3, 0.7)))
         screen = adb_screencap_img(dev)
         if screen is None:
@@ -289,11 +292,9 @@ def ensure_selected(dev: str, log_fn, stop_event: threading.Event, anti_ban: boo
             else:
                 log_fn(f"[{dev}] Select: Failed to get screenshot.")
                 return False
-
         if find_on_screen(screen, "selected.png"):
             log_fn(f"[{dev}] Troops are selected.")
             return True
-
         pos_not = find_on_screen(screen, "notselected.png")
         if pos_not:
             log_fn(f"[{dev}] Not selected. Clicking to select (Attempt {i + 1}).")
@@ -303,15 +304,13 @@ def ensure_selected(dev: str, log_fn, stop_event: threading.Event, anti_ban: boo
             log_fn(f"[{dev}] Cannot find selected/notselected status (Attempt {i + 1}).")
             if i < retries - 1:
                 wait_or_stop(stop_event, 1.0)
-
     log_fn(f"[{dev}] FAILED to confirm troop selection after {retries} attempts.")
     return False
 
-
 def do_reconnect_if_needed(dev: str, log_fn, stop_event: threading.Event, anti_ban: bool) -> bool:
     screen = adb_screencap_img(dev)
-    if screen is None: return False
-    
+    if screen is None:
+        return False
     if find_on_screen(screen, "disconnect.png"):
         log_fn(f"[{dev}] Disconnect detected.")
         pos_confirm = wait_for_template(dev, "confirm.png", timeout=8.0, stop_event=stop_event)
@@ -325,12 +324,21 @@ def do_reconnect_if_needed(dev: str, log_fn, stop_event: threading.Event, anti_b
             log_fn(f"[{dev}] Confirm button not found after disconnect.")
     return False
 
+def try_exit(dev: str, log_fn, stop_event: threading.Event, anti_ban: bool, timeout: float = 5.0):
+    pos_exit = wait_for_template(dev, "exit.png", timeout=timeout, stop_event=stop_event)
+    if pos_exit:
+        log_fn(f"[{dev}] exit.png found -> exiting current view.")
+        perform_tap(dev, *pos_exit, anti_ban)
+        wait_or_stop(stop_event, get_delay(anti_ban))
+        return True
+    return False
 
 def logic_explore_fog(dev: str, log_fn, only_this_mode: bool, other_modes_selected: bool, stop_event: threading.Event, anti_ban: bool) -> bool:
     reset_to_home(dev, log_fn, stop_event, anti_ban)
-    if stop_event.is_set(): return False
-    if not go_to_coord_and_scout(dev, log_fn, stop_event, anti_ban): return False
-    
+    if stop_event.is_set():
+        return False
+    if not go_to_coord_and_scout(dev, log_fn, stop_event, anti_ban):
+        return False
     pos_explore = wait_for_template(dev, "explore.png", timeout=8.0, stop_event=stop_event)
     if not pos_explore:
         if only_this_mode:
@@ -341,50 +349,49 @@ def logic_explore_fog(dev: str, log_fn, only_this_mode: bool, other_modes_select
                 return False
         else:
             if other_modes_selected:
-                log_fn(f"[{dev}] Explore not found, skipping.")
+                log_fn(f"[{dev}] Explore not found. Trying to exit current panel before switching mode.")
+                try_exit(dev, log_fn, stop_event, anti_ban, timeout=4.0)
                 click_center(dev, log_fn, stop_event, anti_ban)
                 return False
             else:
                 return False
-                
     perform_tap(dev, *pos_explore, anti_ban)
-    if wait_or_stop(stop_event, get_delay(anti_ban)): return False
-    
+    if wait_or_stop(stop_event, get_delay(anti_ban)):
+        return False
     if not ensure_selected(dev, log_fn, stop_event, anti_ban):
         log_fn(f"[{dev}] Fog: Could not select troops.")
         return False
-
-    if stop_event.is_set(): return False
-    
+    if stop_event.is_set():
+        return False
     pos_explore2 = wait_for_template(dev, "explore.png", timeout=6.0, stop_event=stop_event)
     if pos_explore2:
         perform_tap(dev, *pos_explore2, anti_ban)
-        if wait_or_stop(stop_event, get_delay(anti_ban)): return False
-        
+        if wait_or_stop(stop_event, get_delay(anti_ban)):
+            return False
         pos_send = wait_for_template(dev, "send.png", timeout=6.0, stop_event=stop_event)
         if pos_send:
             perform_tap(dev, *pos_send, anti_ban)
             wait_or_stop(stop_event, get_delay(anti_ban))
             log_fn(f"[{dev}] Fog: Sent troops.")
             return True
-            
     log_fn(f"[{dev}] Fog: Failed to complete.")
     return False
 
-
 def logic_explore_other(dev: str, log_fn, only_this_mode: bool, other_modes_selected: bool, stop_event: threading.Event, anti_ban: bool) -> bool:
     reset_to_home(dev, log_fn, stop_event, anti_ban)
-    if stop_event.is_set(): return False
-    if not go_to_coord_and_scout(dev, log_fn, stop_event, anti_ban): return False
-    
+    if stop_event.is_set():
+        return False
+    if not go_to_coord_and_scout(dev, log_fn, stop_event, anti_ban):
+        return False
     pos_other = wait_for_template(dev, "other.png", timeout=8.0, stop_event=stop_event)
     if not pos_other:
         log_fn(f"[{dev}] 'Other' button not found.")
+        if other_modes_selected:
+            try_exit(dev, log_fn, stop_event, anti_ban, timeout=4.0)
         return False
-        
     perform_tap(dev, *pos_other, anti_ban)
-    if wait_or_stop(stop_event, get_delay(anti_ban)): return False
-    
+    if wait_or_stop(stop_event, get_delay(anti_ban)):
+        return False
     pos_go = wait_for_template(dev, "go.png", timeout=8.0, stop_event=stop_event)
     if not pos_go:
         if only_this_mode:
@@ -395,33 +402,34 @@ def logic_explore_other(dev: str, log_fn, only_this_mode: bool, other_modes_sele
                 return False
         else:
             if other_modes_selected:
-                log_fn(f"[{dev}] 'Go' not found, skipping.")
+                log_fn(f"[{dev}] 'Go' not found. Exiting current panel and skipping to next mode.")
+                try_exit(dev, log_fn, stop_event, anti_ban, timeout=4.0)
                 click_center(dev, log_fn, stop_event, anti_ban)
                 return False
             else:
                 return False
-                
     perform_tap(dev, *pos_go, anti_ban)
     random_wait = get_delay(anti_ban, (18.0, 22.0))
     log_fn(f"[{dev}] Other: 'Go' clicked, waiting {random_wait:.1f}s.")
-    if wait_or_stop(stop_event, random_wait): return False
-    
+    if wait_or_stop(stop_event, random_wait):
+        return False
     return True
-
 
 def logic_explore_caves(dev: str, log_fn, only_this_mode: bool, other_modes_selected: bool, stop_event: threading.Event, anti_ban: bool) -> bool:
     reset_to_home(dev, log_fn, stop_event, anti_ban)
-    if stop_event.is_set(): return False
-    if not go_to_coord_and_scout(dev, log_fn, stop_event, anti_ban): return False
-    
+    if stop_event.is_set():
+        return False
+    if not go_to_coord_and_scout(dev, log_fn, stop_event, anti_ban):
+        return False
     pos_caves = wait_for_template(dev, "caves.png", timeout=8.0, stop_event=stop_event)
     if not pos_caves:
         log_fn(f"[{dev}] 'Caves' button not found.")
+        if other_modes_selected:
+            try_exit(dev, log_fn, stop_event, anti_ban, timeout=4.0)
         return False
-        
     perform_tap(dev, *pos_caves, anti_ban)
-    if wait_or_stop(stop_event, get_delay(anti_ban)): return False
-    
+    if wait_or_stop(stop_event, get_delay(anti_ban)):
+        return False
     pos_go = wait_for_template(dev, "go.png", timeout=8.0, stop_event=stop_event)
     if not pos_go:
         if only_this_mode:
@@ -432,48 +440,48 @@ def logic_explore_caves(dev: str, log_fn, only_this_mode: bool, other_modes_sele
                 return False
         else:
             if other_modes_selected:
-                log_fn(f"[{dev}] Caves: 'Go' not found, skipping.")
+                log_fn(f"[{dev}] Caves: 'Go' not found. Exiting current panel and skipping to next mode.")
+                try_exit(dev, log_fn, stop_event, anti_ban, timeout=4.0)
                 click_center(dev, log_fn, stop_event, anti_ban)
                 return False
             else:
                 return False
-                
     perform_tap(dev, *pos_go, anti_ban)
-    if wait_or_stop(stop_event, get_delay(anti_ban)): return False
-        
+    if wait_or_stop(stop_event, get_delay(anti_ban)):
+        return False
     if not ensure_selected(dev, log_fn, stop_event, anti_ban):
         log_fn(f"[{dev}] Caves: Could not select troops.")
         return False
-
-    if stop_event.is_set(): return False
-    
+    if stop_event.is_set():
+        return False
     pos_invest = wait_for_template(dev, "investigate.png", timeout=8.0, stop_event=stop_event)
     if not pos_invest:
         log_fn(f"[{dev}] 'Investigate' button not found.")
+        if other_modes_selected:
+            try_exit(dev, log_fn, stop_event, anti_ban, timeout=4.0)
         return False
-        
     perform_tap(dev, *pos_invest, anti_ban)
-    if wait_or_stop(stop_event, get_delay(anti_ban)): return False
-    
+    if wait_or_stop(stop_event, get_delay(anti_ban)):
+        return False
     res = wait_for_any_template(dev, ["sleep.png", "back.png", "camp.png"], timeout=12.0, stop_event=stop_event)
     if not res:
         log_fn(f"[{dev}] Did not find sleep/back/camp buttons.")
+        if other_modes_selected:
+            try_exit(dev, log_fn, stop_event, anti_ban, timeout=4.0)
         return False
-        
     name, pos = res
     perform_tap(dev, *pos, anti_ban)
-    if wait_or_stop(stop_event, get_delay(anti_ban)): return False
-    
+    if wait_or_stop(stop_event, get_delay(anti_ban)):
+        return False
     pos_send = wait_for_template(dev, "send.png", timeout=8.0, stop_event=stop_event)
     if pos_send:
         perform_tap(dev, *pos_send, anti_ban)
-        if wait_or_stop(stop_event, get_delay(anti_ban)): return False
+        if wait_or_stop(stop_event, get_delay(anti_ban)):
+            return False
         log_fn(f"[{dev}] Caves: Sent troops.")
         return True
-        
     log_fn(f"[{dev}] Caves: 'Send' button not found.")
     return False
-
 
 class ClickableLabel(QLabel):
     clicked = pyqtSignal(int, int)
@@ -481,7 +489,6 @@ class ClickableLabel(QLabel):
         if event.button() == Qt.LeftButton:
             self.clicked.emit(int(event.pos().x()), int(event.pos().y()))
         super().mousePressEvent(event)
-
 
 class SetupDialog(QDialog):
     def __init__(self, dev: str, native_img: np.ndarray, ref_w: int, ref_h: int, parent=None):
@@ -528,12 +535,11 @@ class SetupDialog(QDialog):
         if save_coords(data):
             self.accept()
 
-
 class MainWindow(QMainWindow):
     sig_log = pyqtSignal(str)
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SB TOOL - TESTER")
+        self.setWindowTitle("Fix Bugs 23/8/2025")
         self.setWindowIcon(QIcon("logo.png"))
         self.resize(260, 520)
         self.stop_event = threading.Event()
@@ -695,9 +701,12 @@ class MainWindow(QMainWindow):
     def scan_and_connect(self):
         try:
             previously_selected = set(self.get_selected_devices())
-            devices = get_ldplayer_devices()
+            try_connect_bluestacks_ports()
+            time.sleep(0.2)
+            devices = get_emulator_devices()
             for dev in devices:
                 auto_connect(dev)
+            parsed = dict(adb_devices_raw())
             self.table.setRowCount(len(devices))
             for row, dev in enumerate(devices):
                 chk = QCheckBox()
@@ -713,9 +722,13 @@ class MainWindow(QMainWindow):
                 item_dev = QTableWidgetItem(dev)
                 item_dev.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(row, 1, item_dev)
-                item_status = QTableWidgetItem("🟢 Connected" if dev in connected_devices else "🔴 Error")
+                state = parsed.get(dev, "")
+                ok = (state == "device")
+                item_status = QTableWidgetItem("🟢 Connected" if ok else "🔴 Error")
                 item_status.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(row, 2, item_status)
+                if ok:
+                    connected_devices.add(dev)
             self.log("Device list updated.")
         except Exception as e:
             self.log(f"Error scanning devices: {e}")
@@ -753,8 +766,6 @@ class MainWindow(QMainWindow):
         for dev in selected:
             if dev in self.workers and self.workers[dev].is_alive():
                 continue
-            
-            # Get settings from UI to pass to worker
             anti_ban_on = self.chk_anti_ban.isChecked()
             reconnect_on = self.chk_auto_reconnect.isChecked()
             modes_on = {
@@ -762,7 +773,6 @@ class MainWindow(QMainWindow):
                 "caves": self.chk_explore_caves.isChecked(),
                 "other": self.chk_explore_other.isChecked()
             }
-
             t = threading.Thread(target=self.run_worker, args=(dev, anti_ban_on, reconnect_on, modes_on), daemon=True)
             t.start()
             self.workers[dev] = t
@@ -774,56 +784,49 @@ class MainWindow(QMainWindow):
 
     def run_worker(self, dev: str, anti_ban: bool, reconnect: bool, modes: dict):
         def lg(msg): self.log(msg)
-        
         lg(f"[{dev}] Worker started. Anti-ban: {'ON' if anti_ban else 'OFF'}")
-
         while not self.stop_event.is_set():
             try:
                 if reconnect:
                     if do_reconnect_if_needed(dev, lg, self.stop_event, anti_ban):
-                        if self.stop_event.is_set(): break
-                
+                        if self.stop_event.is_set():
+                            break
                 mode_list = [
                     ("fog", modes["fog"]),
                     ("caves", modes["caves"]),
                     ("other", modes["other"]),
                 ]
-                
                 selected_modes = [m for m, on in mode_list if on]
                 if not selected_modes:
-                    if self.stop_event.wait(1.0): break
+                    if self.stop_event.wait(1.0):
+                        break
                     continue
-                    
                 only_this_mode = lambda name: (selected_modes == [name])
                 other_selected = lambda name: (len(selected_modes) > 1)
-                
                 done = False
                 for name, is_on in mode_list:
-                    if self.stop_event.is_set(): break
-                    if not is_on: continue
-                    
+                    if self.stop_event.is_set():
+                        break
+                    if not is_on:
+                        continue
                     lg(f"[{dev}] Running mode: Explore {name.capitalize()}")
-                    
                     if name == "fog":
                         done = logic_explore_fog(dev, lg, only_this_mode("fog"), other_selected("fog"), self.stop_event, anti_ban)
                     elif name == "caves":
                         done = logic_explore_caves(dev, lg, only_this_mode("caves"), other_selected("caves"), self.stop_event, anti_ban)
                     elif name == "other":
                         done = logic_explore_other(dev, lg, only_this_mode("other"), other_selected("other"), self.stop_event, anti_ban)
-                        
                     if done or self.stop_event.is_set():
                         break
-                        
-                if self.stop_event.wait(0.5): break
-                
+                if self.stop_event.wait(0.5):
+                    break
             except Exception as e:
                 lg(f"[{dev}] Worker error: {e}")
-                if self.stop_event.wait(1.0): break
-
+                if self.stop_event.wait(1.0):
+                    break
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     win = MainWindow()
     win.show()
     sys.exit(app.exec_())
-
