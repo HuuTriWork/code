@@ -8,7 +8,7 @@ class UpdateNotification:
     def __init__(self, root):
         self.root = root
         self.root.title("Thông báo cập nhật hệ thống")
-        self.root.geometry("600x400")
+        self.root.geometry("900x600")
         self.root.configure(bg='#f0f8ff')
         self.root.resizable(False, False)
         
@@ -139,3 +139,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
