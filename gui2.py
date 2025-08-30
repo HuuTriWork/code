@@ -56,8 +56,6 @@ LONG_RECONNECT_WAIT = 30.0
 connected_devices = set()
 halted_devices = set()
 
-PORT_CANDIDATES = [5555, 5557, 5559, 5561, 5563, 5565, 5567, 5569, 5571, 5573]
-
 
 def adb_devices_raw():
     try:
@@ -77,20 +75,35 @@ def adb_devices_raw():
         return []
 
 
-def try_connect_ports():
-    for p in PORT_CANDIDATES:
-        ip_port = f"127.0.0.1:{p}"
-        try:
-            subprocess.run([ADB_PATH, "connect", ip_port], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.2)
-        except Exception:
-            pass
+def is_ip_port(dev: str) -> bool:
+    try:
+        if dev.startswith("localhost:"):
+            return True
+        parts = dev.split(":")
+        if len(parts) != 2:
+            return False
+        host, port = parts[0], parts[1]
+        if host == "127.0.0.1":
+            int(port)
+            return True
+        octets = host.split(".")
+        if len(octets) != 4:
+            return False
+        for o in octets:
+            v = int(o)
+            if v < 0 or v > 255:
+                return False
+        int(port)
+        return True
+    except Exception:
+        return False
 
 
-def get_ipport_devices():
+def get_supported_devices():
     parsed = adb_devices_raw()
     devices = []
     for dev_id, _ in parsed:
-        if dev_id.startswith("127.0.0.1:") or dev_id.startswith("localhost:"):
+        if dev_id.startswith("emulator-") or is_ip_port(dev_id):
             devices.append(dev_id)
     return devices
 
@@ -98,11 +111,14 @@ def get_ipport_devices():
 def ensure_connected(dev):
     if dev in connected_devices:
         return
-    try:
-        subprocess.run([ADB_PATH, "connect", dev], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.2)
+    if is_ip_port(dev):
+        try:
+            subprocess.run([ADB_PATH, "connect", dev], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.2)
+            connected_devices.add(dev)
+        except Exception:
+            pass
+    else:
         connected_devices.add(dev)
-    except Exception:
-        pass
 
 
 def adb_tap(dev: str, x: int, y: int):
@@ -120,7 +136,7 @@ def adb_tap_randomized(dev: str, x: int, y: int, offset: int = RANDOM_OFFSET):
 def adb_screencap_img(dev: str) -> Optional[np.ndarray]:
     try:
         proc = subprocess.run([ADB_PATH, "-s", dev, "exec-out", "screencap", "-p"],
-                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=8)
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=6)
         data = proc.stdout
         if not data:
             return None
@@ -799,7 +815,7 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         header.setSectionsClickable(False)
-        self.table.setStyleSheet("QTableWidget{border:1px solid gray;} QHeaderView::section{border:1px solid gray;background-color:#f0f0f0;} QTableWidget::item{border:1px solid gray;}")
+        self.table.setStyleSheet("QTableWidget{border:1px solid gray;} QHeaderView::section{border:1px solid gray;background-color:#f0f0f0;} QTableWidget::item{border:1px solid gray;}" )
         frame_emulator = QFrame()
         vbox_emulator = QVBoxLayout()
         vbox_emulator.setContentsMargins(0, 0, 0, 0)
@@ -926,11 +942,7 @@ class MainWindow(QMainWindow):
     def scan_and_connect(self):
         try:
             previously_selected = set(self.get_selected_devices())
-            try_connect_ports()
-            time.sleep(0.2)
-            devices = get_ipport_devices()
-            for dev in devices:
-                ensure_connected(dev)
+            devices = get_supported_devices()
             parsed = dict(adb_devices_raw())
             self.table.setRowCount(len(devices))
             for row, dev in enumerate(devices):
@@ -949,6 +961,11 @@ class MainWindow(QMainWindow):
                 self.table.setItem(row, 1, item_dev)
                 state = parsed.get(dev, "")
                 ok = (state == "device")
+                if not ok and is_ip_port(dev):
+                    ensure_connected(dev)
+                    parsed = dict(adb_devices_raw())
+                    state = parsed.get(dev, "")
+                    ok = (state == "device")
                 status_text = "Connected" if ok else "Error"
                 item_status = QTableWidgetItem(status_text)
                 item_status.setTextAlignment(Qt.AlignCenter)
