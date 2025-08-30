@@ -5,20 +5,18 @@ import subprocess
 import time
 import threading
 import random
-from typing import Optional, Tuple, Dict, List, Set
+from typing import Optional, Tuple
 import cv2
 import numpy as np
-from datetime import datetime
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QCheckBox, QPushButton, QTextEdit,
-    QHeaderView, QLabel, QFrame, QLineEdit, QDialog, QMessageBox, QProgressBar
+    QHeaderView, QLabel, QFrame, QLineEdit, QDialog, QMessageBox
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QSize, QThread, QMutex, QWaitCondition
-from PyQt5.QtGui import QIcon, QPixmap, QImage, QFont
+from PyQt5.QtCore import Qt, pyqtSignal, QSize
+from PyQt5.QtGui import QIcon, QPixmap, QImage
 
-# Constants
 ADB_PATH = "adb\\adb.exe"
 DATA_DIR = "data"
 CACHE_DIR = "cache"
@@ -26,22 +24,6 @@ os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 DATA_JSON = "data.json"
 CONFIG_JSON = "devices.json"
-LOG_FILE = "app_log.txt"
-
-# Configure logging
-def setup_logging():
-    import logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler(LOG_FILE, encoding='utf-8'),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
-    return logging.getLogger(__name__)
-
-logger = setup_logging()
 
 THRESHOLDS = {
     "disconnect.png": 0.75,
@@ -71,158 +53,15 @@ RANDOM_OFFSET = 5
 FIXED_DELAY = 1.5
 LONG_RECONNECT_WAIT = 30.0
 
+connected_devices = set()
+halted_devices = set()
+
 PORT_CANDIDATES = [5555, 5557, 5559, 5561, 5563, 5565, 5567, 5569, 5571, 5573]
 
-# Thread-safe data structures
-class ThreadSafeSet:
-    def __init__(self):
-        self._set = set()
-        self._lock = threading.Lock()
-    
-    def add(self, item):
-        with self._lock:
-            self._set.add(item)
-    
-    def remove(self, item):
-        with self._lock:
-            self._set.discard(item)
-    
-    def __contains__(self, item):
-        with self._lock:
-            return item in self._set
-    
-    def items(self):
-        with self._lock:
-            return list(self._set)
-
-connected_devices = ThreadSafeSet()
-halted_devices = ThreadSafeSet()
-
-class DeviceWorker(QThread):
-    log_signal = pyqtSignal(str)
-    status_signal = pyqtSignal(str, str)
-    captcha_signal = pyqtSignal(str)
-    progress_signal = pyqtSignal(str, int)
-    
-    def __init__(self, device_id, config, stop_event):
-        super().__init__()
-        self.device_id = device_id
-        self.config = config
-        self.stop_event = stop_event
-        self.is_running = True
-        self.current_mode = ""
-        self.iteration_count = 0
-    
-    def run(self):
-        try:
-            self.log_signal.emit(f"[{self.device_id}] Worker started")
-            self.status_signal.emit(self.device_id, "Running")
-            
-            while self.is_running and not self.stop_event.is_set():
-                if self.device_id in halted_devices.items():
-                    break
-                    
-                # Execute the main logic
-                self.execute_device_cycle()
-                
-                # Small delay between cycles
-                if self.stop_event.wait(1.0):
-                    break
-                    
-        except Exception as e:
-            self.log_signal.emit(f"[{self.device_id}] Worker error: {str(e)}")
-        finally:
-            self.status_signal.emit(self.device_id, "Stopped")
-            self.log_signal.emit(f"[{self.device_id}] Worker terminated")
-    
-    def execute_device_cycle(self):
-        """Execute one complete cycle of actions for the device"""
-        self.iteration_count += 1
-        self.log_signal.emit(f"[{self.device_id}] Starting iteration {self.iteration_count}")
-        
-        # Check for captcha first
-        if self.config.get("captcha", True) and do_captcha_check(self.device_id, self.log_message, self.stop_event):
-            self.captcha_signal.emit(self.device_id)
-            return
-            
-        # Handle reconnection if needed
-        if self.config.get("reconnect", True):
-            if do_reconnect_if_needed(self.device_id, self.log_message, self.stop_event, 
-                                     self.config.get("anti_ban", True)):
-                if self.stop_event.is_set() or self.device_id in halted_devices.items():
-                    return
-        
-        # Execute enabled modes
-        modes = [
-            ("fog", self.config.get("fog", True), self.execute_fog_mode),
-            ("caves", self.config.get("caves", False), self.execute_caves_mode),
-            ("other", self.config.get("other", False), self.execute_other_mode),
-        ]
-        
-        for mode_name, enabled, mode_func in modes:
-            if not enabled or self.stop_event.is_set() or self.device_id in halted_devices.items():
-                continue
-                
-            self.current_mode = mode_name
-            self.log_signal.emit(f"[{self.device_id}] Running {mode_name} mode")
-            
-            try:
-                success = mode_func()
-                if success:
-                    self.log_signal.emit(f"[{self.device_id}] {mode_name} mode completed successfully")
-                else:
-                    self.log_signal.emit(f"[{self.device_id}] {mode_name} mode failed")
-            except Exception as e:
-                self.log_signal.emit(f"[{self.device_id}] Error in {mode_name} mode: {str(e)}")
-    
-    def execute_fog_mode(self):
-        return logic_explore_fog(
-            self.device_id, 
-            self.log_message, 
-            False,  # only_this_mode
-            True,   # other_modes_selected
-            self.stop_event, 
-            self.config.get("anti_ban", True),
-            self.config.get("captcha", True),
-            self.captcha_notify
-        )
-    
-    def execute_caves_mode(self):
-        return logic_explore_caves(
-            self.device_id, 
-            self.log_message, 
-            False,  # only_this_mode
-            True,   # other_modes_selected
-            self.stop_event, 
-            self.config.get("anti_ban", True),
-            self.config.get("captcha", True),
-            self.captcha_notify
-        )
-    
-    def execute_other_mode(self):
-        return logic_explore_other(
-            self.device_id, 
-            self.log_message, 
-            False,  # only_this_mode
-            True,   # other_modes_selected
-            self.stop_event, 
-            self.config.get("anti_ban", True),
-            self.config.get("captcha", True),
-            self.captcha_notify
-        )
-    
-    def log_message(self, msg):
-        self.log_signal.emit(msg)
-    
-    def captcha_notify(self, dev):
-        self.captcha_signal.emit(dev)
-    
-    def stop(self):
-        self.is_running = False
 
 def adb_devices_raw():
     try:
-        result = subprocess.run([ADB_PATH, "devices"], capture_output=True, text=True, timeout=10)
+        result = subprocess.run([ADB_PATH, "devices"], capture_output=True, text=True)
         lines = result.stdout.strip().splitlines()[1:]
         parsed = []
         for line in lines:
@@ -234,98 +73,80 @@ def adb_devices_raw():
             else:
                 parsed.append((parts[0], ""))
         return parsed
-    except subprocess.TimeoutExpired:
-        logger.warning("ADB devices command timed out")
+    except Exception:
         return []
-    except Exception as e:
-        logger.error(f"Error getting ADB devices: {e}")
-        return []
+
 
 def try_connect_ports():
     for p in PORT_CANDIDATES:
         ip_port = f"127.0.0.1:{p}"
         try:
-            subprocess.run([ADB_PATH, "connect", ip_port], 
-                          stdout=subprocess.DEVNULL, 
-                          stderr=subprocess.DEVNULL, 
-                          timeout=1.2)
+            subprocess.run([ADB_PATH, "connect", ip_port], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.2)
         except Exception:
             pass
+
 
 def get_ipport_devices():
     parsed = adb_devices_raw()
     devices = []
-    for dev_id, status in parsed:
-        if (dev_id.startswith("127.0.0.1:") or dev_id.startswith("localhost:")) and status == "device":
+    for dev_id, _ in parsed:
+        if dev_id.startswith("127.0.0.1:") or dev_id.startswith("localhost:"):
             devices.append(dev_id)
     return devices
 
+
 def ensure_connected(dev):
-    if dev in connected_devices.items():
-        return True
+    if dev in connected_devices:
+        return
     try:
-        result = subprocess.run([ADB_PATH, "connect", dev], 
-                              capture_output=True, text=True, timeout=5)
-        if "connected" in result.stdout:
-            connected_devices.add(dev)
-            return True
-    except Exception as e:
-        logger.error(f"Error connecting to {dev}: {e}")
-    return False
+        subprocess.run([ADB_PATH, "connect", dev], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.2)
+        connected_devices.add(dev)
+    except Exception:
+        pass
+
 
 def adb_tap(dev: str, x: int, y: int):
-    try:
-        subprocess.run([ADB_PATH, "-s", dev, "shell", "input", "tap", str(int(x)), str(int(y))],
-                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
-    except subprocess.TimeoutExpired:
-        logger.warning(f"Tap command timed out for {dev}")
-    except Exception as e:
-        logger.error(f"Error tapping on {dev}: {e}")
+    subprocess.run([ADB_PATH, "-s", dev, "shell", "input", "tap", str(int(x)), str(int(y))],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
 
 def adb_tap_randomized(dev: str, x: int, y: int, offset: int = RANDOM_OFFSET):
     rand_x = x + random.randint(-offset, offset)
     rand_y = y + random.randint(-offset, offset)
-    adb_tap(dev, rand_x, rand_y)
+    subprocess.run([ADB_PATH, "-s", dev, "shell", "input", "tap", str(int(rand_x)), str(int(rand_y))],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
 
 def adb_screencap_img(dev: str) -> Optional[np.ndarray]:
     try:
         proc = subprocess.run([ADB_PATH, "-s", dev, "exec-out", "screencap", "-p"],
-                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=8)
         data = proc.stdout
         if not data:
             return None
         img_array = np.frombuffer(data, np.uint8)
         img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
         if img is not None:
-            cv2.imwrite(os.path.join(CACHE_DIR, f"{dev.replace(':','_')}_{int(time.time())}.png"), img)
+            cv2.imwrite(os.path.join(CACHE_DIR, f"{dev.replace(':','_')}.png"), img)
         return img
-    except subprocess.TimeoutExpired:
-        logger.warning(f"Screencap timed out for {dev}")
+    except Exception:
         return None
-    except Exception as e:
-        logger.error(f"Error getting screenshot from {dev}: {e}")
-        return None
+
 
 def load_template(name: str) -> Optional[np.ndarray]:
     path = os.path.join(DATA_DIR, name)
     if not os.path.exists(path):
-        logger.warning(f"Template not found: {path}")
         return None
     return cv2.imread(path, cv2.IMREAD_COLOR)
 
+
 def match_template(screen: np.ndarray, templ: np.ndarray) -> Tuple[float, Tuple[int, int]]:
-    if screen is None or templ is None:
-        return 0, (0, 0)
-        
-    try:
-        res = cv2.matchTemplate(screen, templ, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-        h, w = templ.shape[:2]
-        center = (max_loc[0] + w // 2, max_loc[1] + h // 2)
-        return max_val, center
-    except Exception as e:
-        logger.error(f"Error in template matching: {e}")
-        return 0, (0, 0)
+    res = cv2.matchTemplate(screen, templ, cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, max_loc = cv2.minMaxLoc(res)
+    h, w = templ.shape[:2]
+    center = (max_loc[0] + w // 2, max_loc[1] + h // 2)
+    return max_val, center
+
 
 def find_on_screen(screen: np.ndarray, template_name: str) -> Optional[Tuple[int, int]]:
     templ = load_template(template_name)
@@ -337,8 +158,8 @@ def find_on_screen(screen: np.ndarray, template_name: str) -> Optional[Tuple[int
         return center
     return None
 
-def wait_for_template(dev: str, template_name: str, timeout: float = 12.0, 
-                     interval: float = 0.8, stop_event: threading.Event = None) -> Optional[Tuple[int, int]]:
+
+def wait_for_template(dev: str, template_name: str, timeout: float = 12.0, interval: float = 0.8, stop_event: threading.Event = None) -> Optional[Tuple[int, int]]:
     t0 = time.time()
     while time.time() - t0 < timeout:
         if stop_event and stop_event.is_set():
@@ -356,8 +177,8 @@ def wait_for_template(dev: str, template_name: str, timeout: float = 12.0,
             return None
     return None
 
-def wait_for_any_template(dev: str, names: list, timeout: float = 12.0, 
-                         interval: float = 0.8, stop_event: threading.Event = None) -> Optional[Tuple[str, Tuple[int, int]]]:
+
+def wait_for_any_template(dev: str, names: list, timeout: float = 12.0, interval: float = 0.8, stop_event: threading.Event = None) -> Optional[Tuple[str, Tuple[int, int]]]:
     t0 = time.time()
     while time.time() - t0 < timeout:
         if stop_event and stop_event.is_set():
@@ -376,6 +197,7 @@ def wait_for_any_template(dev: str, names: list, timeout: float = 12.0,
             return None
     return None
 
+
 def wait_or_stop(stop_event: threading.Event, seconds: float) -> bool:
     if stop_event:
         return stop_event.wait(seconds)
@@ -383,10 +205,12 @@ def wait_or_stop(stop_event: threading.Event, seconds: float) -> bool:
         time.sleep(seconds)
         return False
 
+
 def get_delay(anti_ban_enabled: bool, delay_range: Tuple[float, float] = RANDOM_DELAY_RANGE) -> float:
     if anti_ban_enabled:
         return random.uniform(delay_range[0], delay_range[1])
     return FIXED_DELAY
+
 
 def perform_tap(dev:str, x: int, y: int, anti_ban_enabled: bool):
     if anti_ban_enabled:
@@ -394,24 +218,25 @@ def perform_tap(dev:str, x: int, y: int, anti_ban_enabled: bool):
     else:
         adb_tap(dev, x, y)
 
+
 def load_coords() -> dict:
     if not os.path.exists(DATA_JSON):
         return {}
     try:
         with open(DATA_JSON, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception as e:
-        logger.error(f"Error loading coordinates: {e}")
+    except Exception:
         return {}
+
 
 def save_coords(data: dict):
     try:
         with open(DATA_JSON, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return True
-    except Exception as e:
-        logger.error(f"Error saving coordinates: {e}")
+    except Exception:
         return False
+
 
 def load_device_configs() -> dict:
     if not os.path.exists(CONFIG_JSON):
@@ -419,18 +244,18 @@ def load_device_configs() -> dict:
     try:
         with open(CONFIG_JSON, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception as e:
-        logger.error(f"Error loading device configs: {e}")
+    except Exception:
         return {}
+
 
 def save_device_configs(data: dict):
     try:
         with open(CONFIG_JSON, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return True
-    except Exception as e:
-        logger.error(f"Error saving device configs: {e}")
+    except Exception:
         return False
+
 
 def click_center(dev: str, log_fn, stop_event: threading.Event, anti_ban: bool):
     img = adb_screencap_img(dev)
@@ -442,6 +267,7 @@ def click_center(dev: str, log_fn, stop_event: threading.Event, anti_ban: bool):
     perform_tap(dev, cx, cy, anti_ban)
     if wait_or_stop(stop_event, get_delay(anti_ban)):
         return
+
 
 def reset_to_home(dev: str, log_fn, stop_event: threading.Event, anti_ban: bool):
     screen = adb_screencap_img(dev)
@@ -468,6 +294,7 @@ def reset_to_home(dev: str, log_fn, stop_event: threading.Event, anti_ban: bool)
         else:
             log_fn(f"[{dev}] Could not find home icon after exiting to map.")
 
+
 def go_to_coord_and_scout(dev: str, log_fn, stop_event: threading.Event, anti_ban: bool):
     coords = load_coords()
     info = coords.get(dev)
@@ -488,6 +315,7 @@ def go_to_coord_and_scout(dev: str, log_fn, stop_event: threading.Event, anti_ba
         return True
     log_fn(f"[{dev}] Scout button not found.")
     return False
+
 
 def ensure_selected(dev: str, log_fn, stop_event: threading.Event, anti_ban: bool, retries: int = 3):
     for i in range(retries):
@@ -518,6 +346,7 @@ def ensure_selected(dev: str, log_fn, stop_event: threading.Event, anti_ban: boo
     log_fn(f"[{dev}] FAILED to confirm troop selection after {retries} attempts.")
     return False
 
+
 def do_reconnect_if_needed(dev: str, log_fn, stop_event: threading.Event, anti_ban: bool) -> bool:
     screen = adb_screencap_img(dev)
     if screen is None:
@@ -535,12 +364,14 @@ def do_reconnect_if_needed(dev: str, log_fn, stop_event: threading.Event, anti_b
             log_fn(f"[{dev}] Confirm button not found after disconnect.")
     return False
 
+
 def do_captcha_check(dev: str, log_fn, stop_event: threading.Event) -> bool:
     names = ["captcha1.png", "captcha2.png", "captcha3.png"]
     res = wait_for_any_template(dev, names, timeout=0.5, interval=0.5, stop_event=stop_event)
     if res:
         return True
     return False
+
 
 def try_exit(dev: str, log_fn, stop_event: threading.Event, anti_ban: bool, timeout: float = 5.0):
     pos_exit = wait_for_template(dev, "exit.png", timeout=timeout, stop_event=stop_event)
@@ -550,6 +381,7 @@ def try_exit(dev: str, log_fn, stop_event: threading.Event, anti_ban: bool, time
         wait_or_stop(stop_event, get_delay(anti_ban))
         return True
     return False
+
 
 def logic_explore_fog(dev: str, log_fn, only_this_mode: bool, other_modes_selected: bool, stop_event: threading.Event, anti_ban: bool, captcha_enabled: bool, captcha_notify):
     reset_to_home(dev, log_fn, stop_event, anti_ban)
@@ -633,6 +465,7 @@ def logic_explore_fog(dev: str, log_fn, only_this_mode: bool, other_modes_select
     log_fn(f"[{dev}] Fog: Failed to complete.")
     return False
 
+
 def logic_explore_other(dev: str, log_fn, only_this_mode: bool, other_modes_selected: bool, stop_event: threading.Event, anti_ban: bool, captcha_enabled: bool, captcha_notify):
     reset_to_home(dev, log_fn, stop_event, anti_ban)
     if stop_event.is_set():
@@ -679,6 +512,7 @@ def logic_explore_other(dev: str, log_fn, only_this_mode: bool, other_modes_sele
     if wait_or_stop(stop_event, random_wait):
         return False
     return True
+
 
 def logic_explore_caves(dev: str, log_fn, only_this_mode: bool, other_modes_selected: bool, stop_event: threading.Event, anti_ban: bool, captcha_enabled: bool, captcha_notify):
     reset_to_home(dev, log_fn, stop_event, anti_ban)
@@ -820,7 +654,7 @@ class DeviceSettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(f"Settings - {dev}")
         self.dev = dev
-        self.setMinimumSize(340, 260)
+        self.setMinimumSize(360, 320)
         vbox = QVBoxLayout()
         self.chk_fog = QCheckBox("Explore Fog")
         self.chk_caves = QCheckBox("Explore Caves")
@@ -828,10 +662,15 @@ class DeviceSettingsDialog(QDialog):
         self.chk_reconnect = QCheckBox("Auto Reconnect")
         self.chk_anti = QCheckBox("Enable Anti-ban")
         self.chk_captcha = QCheckBox("Captcha Alert")
+        self.chk_auto_pause = QCheckBox("Enable Auto Pause")
         self.input_x = QLineEdit()
         self.input_y = QLineEdit()
+        self.input_run = QLineEdit()
+        self.input_pause = QLineEdit()
         self.input_x.setFixedWidth(80)
         self.input_y.setFixedWidth(80)
+        self.input_run.setFixedWidth(80)
+        self.input_pause.setFixedWidth(80)
         hbox_coords = QHBoxLayout()
         hbox_coords.addWidget(QLabel("X:"))
         hbox_coords.addWidget(self.input_x)
@@ -841,13 +680,21 @@ class DeviceSettingsDialog(QDialog):
         btn_setup.clicked.connect(self.open_setup)
         hbox_coords.addWidget(btn_setup)
         hbox_coords.addStretch()
+        hbox_pause = QHBoxLayout()
+        hbox_pause.addWidget(QLabel("Run (min):"))
+        hbox_pause.addWidget(self.input_run)
+        hbox_pause.addWidget(QLabel("Pause (min):"))
+        hbox_pause.addWidget(self.input_pause)
+        hbox_pause.addStretch()
         vbox.addWidget(self.chk_fog)
         vbox.addWidget(self.chk_caves)
         vbox.addWidget(self.chk_other)
         vbox.addWidget(self.chk_reconnect)
         vbox.addWidget(self.chk_anti)
         vbox.addWidget(self.chk_captcha)
+        vbox.addWidget(self.chk_auto_pause)
         vbox.addLayout(hbox_coords)
+        vbox.addLayout(hbox_pause)
         hbox_buttons = QHBoxLayout()
         btn_save = QPushButton("Save")
         btn_cancel = QPushButton("Cancel")
@@ -867,6 +714,9 @@ class DeviceSettingsDialog(QDialog):
         self.chk_reconnect.setChecked(cfg.get("reconnect", True))
         self.chk_anti.setChecked(cfg.get("anti_ban", True))
         self.chk_captcha.setChecked(cfg.get("captcha", True))
+        self.chk_auto_pause.setChecked(cfg.get("auto_pause", False))
+        self.input_run.setText(str(cfg.get("run_minutes", 30)))
+        self.input_pause.setText(str(cfg.get("pause_minutes", 10)))
         coords = load_coords().get(self.dev, {})
         self.input_x.setText(str(coords.get("x", "")))
         self.input_y.setText(str(coords.get("y", "")))
@@ -889,6 +739,14 @@ class DeviceSettingsDialog(QDialog):
 
     def save(self):
         data = load_device_configs()
+        try:
+            run_minutes = int(self.input_run.text().strip()) if self.input_run.text().strip() else 30
+        except Exception:
+            run_minutes = 30
+        try:
+            pause_minutes = int(self.input_pause.text().strip()) if self.input_pause.text().strip() else 10
+        except Exception:
+            pause_minutes = 10
         data[self.dev] = {
             "fog": bool(self.chk_fog.isChecked()),
             "caves": bool(self.chk_caves.isChecked()),
@@ -896,6 +754,9 @@ class DeviceSettingsDialog(QDialog):
             "reconnect": bool(self.chk_reconnect.isChecked()),
             "anti_ban": bool(self.chk_anti.isChecked()),
             "captcha": bool(self.chk_captcha.isChecked()),
+            "auto_pause": bool(self.chk_auto_pause.isChecked()),
+            "run_minutes": run_minutes,
+            "pause_minutes": pause_minutes,
         }
         save_device_configs(data)
         coords = load_coords()
@@ -915,75 +776,20 @@ class MainWindow(QMainWindow):
     sig_log = pyqtSignal(str)
     sig_popup = pyqtSignal(str)
     sig_status = pyqtSignal(str, str)
-    sig_progress = pyqtSignal(str, int)
-    
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Multi-Emulator Controller - Thread-Safe Version")
+        self.setWindowTitle("Update 30/8/2025 - Multiple Emulator Support")
         self.setWindowIcon(QIcon("logo.png"))
-        self.resize(800, 640)
+        self.resize(420, 640)
         self.workers = {}
         self.device_stop_events = {}
         self.device_buttons = {}
-        self.device_progress = {}
-        
-        # Set up UI
-        self.setup_ui()
-        
-        # Connect signals
-        self.sig_log.connect(self.on_log)
-        self.sig_popup.connect(self.on_captcha_popup)
-        self.sig_status.connect(self.on_set_status)
-        self.sig_progress.connect(self.on_set_progress)
-        
-        # Initial scan
-        self.scan_and_connect()
-
-    def setup_ui(self):
         main_layout = QVBoxLayout()
         main_layout.setSpacing(10)
         main_layout.setContentsMargins(6, 6, 6, 6)
-        
-        # Toolbar
-        toolbar_layout = QHBoxLayout()
-        
-        self.btn_select_all = QPushButton("Select all")
-        self.btn_select_all.setFixedSize(100, 26)
-        self.btn_select_all.clicked.connect(self.select_all)
-        
-        self.btn_deselect_all = QPushButton("Deselect all")
-        self.btn_deselect_all.setFixedSize(100, 26)
-        self.btn_deselect_all.clicked.connect(self.deselect_all)
-        
-        self.btn_start_all = QPushButton("Start all")
-        self.btn_start_all.setFixedSize(100, 26)
-        self.btn_start_all.clicked.connect(self.start_all)
-        
-        self.btn_stop_all = QPushButton("Stop all")
-        self.btn_stop_all.setFixedSize(100, 26)
-        self.btn_stop_all.clicked.connect(self.stop_all)
-        
-        self.btn_refresh = QPushButton("🔃 Refresh")
-        self.btn_refresh.setFixedSize(100, 26)
-        self.btn_refresh.setToolTip("Refresh device list")
-        self.btn_refresh.clicked.connect(self.scan_and_connect)
-        
-        self.btn_clear_logs = QPushButton("Clear Logs")
-        self.btn_clear_logs.setFixedSize(100, 26)
-        self.btn_clear_logs.clicked.connect(self.clear_logs)
-
-        toolbar_layout.addWidget(self.btn_select_all)
-        toolbar_layout.addWidget(self.btn_deselect_all)
-        toolbar_layout.addWidget(self.btn_start_all)
-        toolbar_layout.addWidget(self.btn_stop_all)
-        toolbar_layout.addWidget(self.btn_refresh)
-        toolbar_layout.addWidget(self.btn_clear_logs)
-        toolbar_layout.addStretch()
-
-        # Devices table
         self.table = QTableWidget()
-        self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["#", "Device (ip:port)", "Status", "Progress", "Controls", "Settings"])
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["#", "Device (ip:port)", "Status Log", "Controls", "Settings"])
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
         header = self.table.horizontalHeader()
@@ -992,15 +798,14 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
         header.setSectionsClickable(False)
-        self.table.setStyleSheet("""
-            QTableWidget{border:1px solid gray;} 
-            QHeaderView::section{border:1px solid gray;background-color:#f0f0f0;} 
-            QTableWidget::item{border:1px solid gray;}
-        """)
-        
-        # Log area
+        self.table.setStyleSheet("QTableWidget{border:1px solid gray;} QHeaderView::section{border:1px solid gray;background-color:#f0f0f0;} QTableWidget::item{border:1px solid gray;}")
+        frame_emulator = QFrame()
+        vbox_emulator = QVBoxLayout()
+        vbox_emulator.setContentsMargins(0, 0, 0, 0)
+        vbox_emulator.addWidget(self.table)
+        frame_emulator.setLayout(vbox_emulator)
+        main_layout.addWidget(frame_emulator)
         frame_logs = QFrame()
         vbox_logs = QVBoxLayout()
         vbox_logs.setContentsMargins(0, 0, 0, 0)
@@ -1012,15 +817,41 @@ class MainWindow(QMainWindow):
         self.logs.setStyleSheet("border:1px solid gray;border-top:none;")
         vbox_logs.addWidget(self.logs)
         frame_logs.setLayout(vbox_logs)
-        
-        # Add widgets to main layout
-        main_layout.addLayout(toolbar_layout)
-        main_layout.addWidget(self.table)
         main_layout.addWidget(frame_logs)
-        
         container = QWidget()
         container.setLayout(main_layout)
         self.setCentralWidget(container)
+        toolbar_layout = QHBoxLayout()
+        self.btn_select_all = QPushButton("Select all")
+        self.btn_select_all.setFixedSize(100, 26)
+        self.btn_select_all.clicked.connect(self.select_all)
+        self.btn_deselect_all = QPushButton("Deselect all")
+        self.btn_deselect_all.setFixedSize(100, 26)
+        self.btn_deselect_all.clicked.connect(self.deselect_all)
+        self.btn_start_all = QPushButton("Start all")
+        self.btn_start_all.setFixedSize(100, 26)
+        self.btn_start_all.clicked.connect(self.start_all)
+        self.btn_stop_all = QPushButton("Stop all")
+        self.btn_stop_all.setFixedSize(100, 26)
+        self.btn_stop_all.clicked.connect(self.stop_all)
+        self.btn_refresh = QPushButton("🔃")
+        self.btn_refresh.setFixedSize(40, 26)
+        self.btn_refresh.setToolTip("Refresh device list")
+        self.btn_refresh.clicked.connect(self.scan_and_connect)
+        toolbar_layout.addWidget(self.btn_select_all)
+        toolbar_layout.addWidget(self.btn_deselect_all)
+        toolbar_layout.addWidget(self.btn_start_all)
+        toolbar_layout.addWidget(self.btn_stop_all)
+        toolbar_layout.addWidget(self.btn_refresh)
+        toolbar_layout.addStretch()
+        toolbar_widget = QWidget()
+        toolbar_widget.setLayout(toolbar_layout)
+        self.toolbar = self.addToolBar("main")
+        self.toolbar.addWidget(toolbar_widget)
+        self.sig_log.connect(self.on_log)
+        self.sig_popup.connect(self.on_captcha_popup)
+        self.sig_status.connect(self.on_set_status)
+        self.scan_and_connect()
 
     def on_log(self, msg: str):
         now = time.strftime("%H:%M:%S")
@@ -1029,14 +860,10 @@ class MainWindow(QMainWindow):
     def on_captcha_popup(self, dev: str):
         halted_devices.add(dev)
         self.set_device_status(dev, "Captcha")
-        QMessageBox.warning(self, "Captcha Detected", 
-                           f"Device {dev} has triggered CAPTCHA.\nAll tasks on this device have been stopped.")
+        QMessageBox.warning(self, "Captcha Detected", f"Device {dev} has triggered CAPTCHA.\nAll tasks on this device have been stopped.")
 
     def on_set_status(self, dev: str, status: str):
         self.set_device_status(dev, status)
-
-    def on_set_progress(self, dev: str, value: int):
-        self.set_device_progress(dev, value)
 
     def log(self, msg: str):
         self.sig_log.emit(msg)
@@ -1062,15 +889,6 @@ class MainWindow(QMainWindow):
                 self.table.setItem(row, 2, item_status)
                 break
 
-    def set_device_progress(self, dev: str, value: int):
-        for row in range(self.table.rowCount()):
-            item_dev = self.table.item(row, 1)
-            if item_dev and item_dev.text() == dev:
-                progress_widget = self.table.cellWidget(row, 3)
-                if progress_widget and hasattr(progress_widget, 'setValue'):
-                    progress_widget.setValue(value)
-                break
-
     def select_all(self):
         for row in range(self.table.rowCount()):
             widget = self.table.cellWidget(row, 0)
@@ -1086,9 +904,6 @@ class MainWindow(QMainWindow):
                 chk = widget.layout().itemAt(0).widget()
                 if chk:
                     chk.setChecked(False)
-
-    def clear_logs(self):
-        self.logs.clear()
 
     def start_all(self):
         devices = self.get_selected_devices()
@@ -1112,16 +927,13 @@ class MainWindow(QMainWindow):
         try:
             previously_selected = set(self.get_selected_devices())
             try_connect_ports()
-            time.sleep(0.5)
+            time.sleep(0.2)
             devices = get_ipport_devices()
             for dev in devices:
                 ensure_connected(dev)
-                
             parsed = dict(adb_devices_raw())
             self.table.setRowCount(len(devices))
-            
             for row, dev in enumerate(devices):
-                # Checkbox
                 chk = QCheckBox()
                 if dev in previously_selected:
                     chk.setChecked(True)
@@ -1132,64 +944,46 @@ class MainWindow(QMainWindow):
                 w = QWidget()
                 w.setLayout(layout)
                 self.table.setCellWidget(row, 0, w)
-                
-                # Device ID
                 item_dev = QTableWidgetItem(dev)
                 item_dev.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(row, 1, item_dev)
-                
-                # Status
                 state = parsed.get(dev, "")
                 ok = (state == "device")
                 status_text = "Connected" if ok else "Error"
                 item_status = QTableWidgetItem(status_text)
                 item_status.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(row, 2, item_status)
-                
-                # Progress bar
-                progress_bar = QProgressBar()
-                progress_bar.setRange(0, 100)
-                progress_bar.setValue(0)
-                progress_bar.setTextVisible(True)
-                self.table.setCellWidget(row, 3, progress_bar)
-                
-                # Controls
                 btn_start = QPushButton("Start")
                 btn_start.setFixedSize(60, 22)
                 btn_stop = QPushButton("Stop")
                 btn_stop.setFixedSize(60, 22)
+                btn_settings = QPushButton("⚙️")
+                btn_settings.setFixedSize(60, 22)
                 btn_start.clicked.connect(lambda _, d=dev: self.start_device(d))
                 btn_stop.clicked.connect(lambda _, d=dev: self.stop_device(d))
-                
+                btn_settings.clicked.connect(lambda _, d=dev: self.open_settings(d))
                 ctrl_layout = QHBoxLayout()
                 ctrl_layout.setContentsMargins(2, 2, 2, 2)
                 ctrl_layout.addWidget(btn_start)
                 ctrl_layout.addWidget(btn_stop)
                 ctrl_widget = QWidget()
                 ctrl_widget.setLayout(ctrl_layout)
-                self.table.setCellWidget(row, 4, ctrl_widget)
-                
-                # Settings button
-                btn_settings = QPushButton("⚙️ Settings")
-                btn_settings.setFixedSize(80, 22)
-                btn_settings.clicked.connect(lambda _, d=dev: self.open_settings(d))
+                self.table.setCellWidget(row, 3, ctrl_widget)
                 settings_layout = QHBoxLayout()
                 settings_layout.setContentsMargins(2, 2, 2, 2)
                 settings_layout.setAlignment(Qt.AlignCenter)
                 settings_layout.addWidget(btn_settings)
                 settings_widget = QWidget()
                 settings_widget.setLayout(settings_layout)
-                self.table.setCellWidget(row, 5, settings_widget)
-                
+                self.table.setCellWidget(row, 4, settings_widget)
                 if ok:
                     connected_devices.add(dev)
-                    
-            self.log(f"Device list updated. Found {len(devices)} devices.")
+            self.log("Device list updated.")
         except Exception as e:
             self.log(f"Error scanning devices: {e}")
 
     def open_settings(self, dev: str):
-        if dev in halted_devices.items():
+        if dev in halted_devices:
             self.log(f"[{dev}] Blocked due to CAPTCHA.")
             return
         dlg = DeviceSettingsDialog(dev, self)
@@ -1197,55 +991,116 @@ class MainWindow(QMainWindow):
             self.log(f"[{dev}] Settings saved.")
 
     def start_device(self, dev: str):
-        if dev in halted_devices.items():
+        if dev in halted_devices:
             self.log(f"[{dev}] Blocked due to CAPTCHA.")
             return
-        if dev in self.workers and self.workers[dev].isRunning():
+        if dev in self.workers and self.workers[dev].is_alive():
             self.log(f"[{dev}] Worker already running.")
             return
-            
         cfg = load_device_configs().get(dev, {})
+        anti_ban_on = cfg.get("anti_ban", True)
+        reconnect_on = cfg.get("reconnect", True)
+        captcha_on = cfg.get("captcha", True)
+        modes_on = {"fog": cfg.get("fog", True), "caves": cfg.get("caves", False), "other": cfg.get("other", False)}
+        auto_pause = cfg.get("auto_pause", False)
+        run_minutes = cfg.get("run_minutes", 30)
+        pause_minutes = cfg.get("pause_minutes", 10)
         stop_event = threading.Event()
         self.device_stop_events[dev] = stop_event
-        
-        worker = DeviceWorker(dev, cfg, stop_event)
-        worker.log_signal.connect(self.log)
-        worker.status_signal.connect(self.set_device_status)
-        worker.captcha_signal.connect(self.on_captcha_popup)
-        worker.progress_signal.connect(self.set_device_progress)
-        
-        worker.start()
-        self.workers[dev] = worker
-        self.set_device_status(dev, "Starting")
-        self.log(f"[{dev}] Worker started.")
+        t = threading.Thread(target=self.run_worker, args=(dev, anti_ban_on, reconnect_on, captcha_on, modes_on, auto_pause, run_minutes, pause_minutes, stop_event), daemon=True)
+        t.start()
+        self.workers[dev] = t
+        self.sig_status.emit(dev, "Running")
+        self.log(f"[{dev}] Worker started (per-device).")
 
     def stop_device(self, dev: str):
-        if dev in self.workers:
-            self.workers[dev].stop()
-            
         ev = self.device_stop_events.get(dev)
-        if ev:
-            ev.set()
-            
-        self.set_device_status(dev, "Stopping")
+        if not ev:
+            self.log(f"[{dev}] No running worker to stop.")
+            return
+        ev.set()
+        self.sig_status.emit(dev, "Stopping")
         self.log(f"[{dev}] Stop signal sent.")
 
-    def closeEvent(self, event):
-        # Stop all workers on exit
-        for dev, worker in self.workers.items():
-            if worker.isRunning():
-                worker.stop()
-                
-        for ev in self.device_stop_events.values():
-            ev.set()
-            
-        # Wait a moment for threads to finish
-        QThread.msleep(200)
-        event.accept()
+    def run_worker(self, dev: str, anti_ban: bool, reconnect: bool, captcha_enabled: bool, modes: dict, auto_pause: bool, run_minutes: int, pause_minutes: int, stop_event: threading.Event):
+        def lg(msg): self.log(msg)
+        def captcha_notify(d):
+            self.sig_log.emit(f"[{d}] CAPTCHA detected. Stopping device tasks.")
+            self.sig_popup.emit(d)
+        lg(f"[{dev}] Worker started. Anti-ban: {'ON' if anti_ban else 'OFF'}")
+        error_count = 0
+        run_start_global = time.time()
+        while not stop_event.is_set():
+            if dev in halted_devices:
+                break
+            try:
+                if captcha_enabled and do_captcha_check(dev, lg, stop_event):
+                    captcha_notify(dev)
+                    break
+                if reconnect:
+                    if do_reconnect_if_needed(dev, lg, stop_event, anti_ban):
+                        if stop_event.is_set() or dev in halted_devices:
+                            break
+                mode_list = [
+                    ("fog", modes.get("fog", False)),
+                    ("caves", modes.get("caves", False)),
+                    ("other", modes.get("other", False)),
+                ]
+                selected_modes = [m for m, on in mode_list if on]
+                if not selected_modes:
+                    if stop_event.wait(1.0):
+                        break
+                    continue
+                only_this_mode = lambda name: (selected_modes == [name])
+                other_selected = lambda name: (len(selected_modes) > 1)
+                done = False
+                loop_start = time.time()
+                for name, is_on in mode_list:
+                    if stop_event.is_set() or dev in halted_devices:
+                        break
+                    if not is_on:
+                        continue
+                    elapsed_loop = time.time() - loop_start
+                    if auto_pause and run_minutes > 0 and elapsed_loop >= (run_minutes * 60):
+                        self.sig_status.emit(dev, "Paused")
+                        lg(f"[{dev}] Auto pause triggered for {pause_minutes} minute(s).")
+                        if stop_event.wait(pause_minutes * 60):
+                            break
+                        self.sig_status.emit(dev, "Running")
+                        loop_start = time.time()
+                    lg(f"[{dev}] Running mode: Explore {name.capitalize()}")
+                    if name == "fog":
+                        done = logic_explore_fog(dev, lg, only_this_mode("fog"), other_selected("fog"), stop_event, anti_ban, captcha_enabled, captcha_notify)
+                    elif name == "caves":
+                        done = logic_explore_caves(dev, lg, only_this_mode("caves"), other_selected("caves"), stop_event, anti_ban, captcha_enabled, captcha_notify)
+                    elif name == "other":
+                        done = logic_explore_other(dev, lg, only_this_mode("other"), other_selected("other"), stop_event, anti_ban, captcha_enabled, captcha_notify)
+                    if dev in halted_devices:
+                        break
+                    if done or stop_event.is_set():
+                        break
+                if dev in halted_devices:
+                    break
+                if stop_event.wait(0.5):
+                    break
+                error_count = 0
+            except Exception as e:
+                lg(f"[{dev}] Worker error: {e}")
+                error_count += 1
+                if error_count >= 3:
+                    lg(f"[{dev}] Too many errors, attempting to re-connect ADB for device.")
+                    try:
+                        ensure_connected(dev)
+                    except Exception:
+                        pass
+                    error_count = 0
+                if stop_event.wait(1.0):
+                    break
+        self.sig_status.emit(dev, "Stopped")
+        self.log(f"[{dev}] Worker terminated.")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setFont(QFont("Segoe UI", 9))
     win = MainWindow()
     win.show()
     sys.exit(app.exec_())
