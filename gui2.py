@@ -40,9 +40,9 @@ THRESHOLDS = {
     "caves.png": 0.85,
     "go.png": 0.85,
     "investigate.png": 0.85,
-    "sleep.png": 0.85,
-    "back.png": 0.85,
-    "camp.png": 0.85,
+    "sleep.png": 0.88,
+    "back.png": 0.88,
+    "camp.png": 0.88,
     "captcha1.png": 0.75,
     "captcha2.png": 0.75,
     "captcha3.png": 0.75,
@@ -1121,4 +1121,5 @@ if __name__ == "__main__":
     win = MainWindow()
     win.show()
     sys.exit(app.exec_())
+
 
