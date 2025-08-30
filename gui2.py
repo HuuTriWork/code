@@ -40,9 +40,9 @@ THRESHOLDS = {
     "caves.png": 0.85,
     "go.png": 0.85,
     "investigate.png": 0.85,
-    "sleep.png": 0.80,
-    "back.png": 0.80,
-    "camp.png": 0.80,
+    "sleep.png": 0.85,
+    "back.png": 0.85,
+    "camp.png": 0.85,
     "captcha1.png": 0.75,
     "captcha2.png": 0.75,
     "captcha3.png": 0.75,
@@ -794,7 +794,7 @@ class MainWindow(QMainWindow):
     sig_status = pyqtSignal(str, str)
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Update 30/8/2025 - Auto Pause + Fix Multiple Emulator")
+        self.setWindowTitle("Update 31/8/2025")
         self.setWindowIcon(QIcon("logo.png"))
         self.resize(420, 640)
         self.workers = {}
@@ -1121,3 +1121,4 @@ if __name__ == "__main__":
     win = MainWindow()
     win.show()
     sys.exit(app.exec_())
+
