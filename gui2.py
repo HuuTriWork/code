@@ -6,14 +6,13 @@ import time
 import threading
 import random
 from typing import Optional, Tuple
-
 import cv2
 import numpy as np
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QCheckBox, QPushButton, QTextEdit,
-    QHeaderView, QLabel, QTabWidget, QFrame, QLineEdit, QDialog, QMessageBox
+    QHeaderView, QLabel, QFrame, QLineEdit, QDialog, QMessageBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QSize
 from PyQt5.QtGui import QIcon, QPixmap, QImage
@@ -24,6 +23,7 @@ CACHE_DIR = "cache"
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 DATA_JSON = "data.json"
+CONFIG_JSON = "devices.json"
 
 THRESHOLDS = {
     "disconnect.png": 0.75,
@@ -215,6 +215,23 @@ def load_coords() -> dict:
 def save_coords(data: dict):
     try:
         with open(DATA_JSON, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+def load_device_configs() -> dict:
+    if not os.path.exists(CONFIG_JSON):
+        return {}
+    try:
+        with open(CONFIG_JSON, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_device_configs(data: dict):
+    try:
+        with open(CONFIG_JSON, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return True
     except Exception:
@@ -603,29 +620,129 @@ class SetupDialog(QDialog):
         if save_coords(data):
             self.accept()
 
+class DeviceSettingsDialog(QDialog):
+    def __init__(self, dev: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Settings - {dev}")
+        self.dev = dev
+        self.setMinimumSize(340, 260)
+        vbox = QVBoxLayout()
+        self.chk_fog = QCheckBox("Explore Fog")
+        self.chk_caves = QCheckBox("Explore Caves")
+        self.chk_other = QCheckBox("Explore Other")
+        self.chk_reconnect = QCheckBox("Auto Reconnect")
+        self.chk_anti = QCheckBox("Enable Anti-ban")
+        self.chk_captcha = QCheckBox("Captcha Alert")
+        self.input_x = QLineEdit()
+        self.input_y = QLineEdit()
+        self.input_x.setFixedWidth(80)
+        self.input_y.setFixedWidth(80)
+        hbox_coords = QHBoxLayout()
+        hbox_coords.addWidget(QLabel("X:"))
+        hbox_coords.addWidget(self.input_x)
+        hbox_coords.addWidget(QLabel("Y:"))
+        hbox_coords.addWidget(self.input_y)
+        btn_setup = QPushButton("Setup")
+        btn_setup.clicked.connect(self.open_setup)
+        hbox_coords.addWidget(btn_setup)
+        hbox_coords.addStretch()
+        vbox.addWidget(self.chk_fog)
+        vbox.addWidget(self.chk_caves)
+        vbox.addWidget(self.chk_other)
+        vbox.addWidget(self.chk_reconnect)
+        vbox.addWidget(self.chk_anti)
+        vbox.addWidget(self.chk_captcha)
+        vbox.addLayout(hbox_coords)
+        hbox_buttons = QHBoxLayout()
+        btn_save = QPushButton("Save")
+        btn_cancel = QPushButton("Cancel")
+        hbox_buttons.addWidget(btn_save)
+        hbox_buttons.addWidget(btn_cancel)
+        vbox.addLayout(hbox_buttons)
+        self.setLayout(vbox)
+        btn_save.clicked.connect(self.save)
+        btn_cancel.clicked.connect(self.reject)
+        self.load()
+
+    def load(self):
+        cfg = load_device_configs().get(self.dev, {})
+        self.chk_fog.setChecked(cfg.get("fog", True))
+        self.chk_caves.setChecked(cfg.get("caves", False))
+        self.chk_other.setChecked(cfg.get("other", False))
+        self.chk_reconnect.setChecked(cfg.get("reconnect", True))
+        self.chk_anti.setChecked(cfg.get("anti_ban", True))
+        self.chk_captcha.setChecked(cfg.get("captcha", True))
+        coords = load_coords().get(self.dev, {})
+        self.input_x.setText(str(coords.get("x", "")))
+        self.input_y.setText(str(coords.get("y", "")))
+
+    def open_setup(self):
+        img = adb_screencap_img(self.dev)
+        if img is None:
+            QMessageBox.warning(self, "Error", f"Could not get screenshot from {self.dev}")
+            return
+        try:
+            ref_w = 960
+            ref_h = 540
+            dlg = SetupDialog(self.dev, img, ref_w, ref_h, self)
+            if dlg.exec_() == QDialog.Accepted:
+                coords = load_coords().get(self.dev, {})
+                self.input_x.setText(str(coords.get("x", "")))
+                self.input_y.setText(str(coords.get("y", "")))
+        except Exception:
+            QMessageBox.warning(self, "Error", "Setup failed")
+
+    def save(self):
+        data = load_device_configs()
+        data[self.dev] = {
+            "fog": bool(self.chk_fog.isChecked()),
+            "caves": bool(self.chk_caves.isChecked()),
+            "other": bool(self.chk_other.isChecked()),
+            "reconnect": bool(self.chk_reconnect.isChecked()),
+            "anti_ban": bool(self.chk_anti.isChecked()),
+            "captcha": bool(self.chk_captcha.isChecked()),
+        }
+        save_device_configs(data)
+        coords = load_coords()
+        try:
+            x = int(self.input_x.text().strip()) if self.input_x.text().strip() else None
+            y = int(self.input_y.text().strip()) if self.input_y.text().strip() else None
+            if x is not None and y is not None:
+                c = coords.get(self.dev, {})
+                c.update({"x": x, "y": y})
+                coords[self.dev] = c
+                save_coords(coords)
+        except Exception:
+            pass
+        self.accept()
+
 class MainWindow(QMainWindow):
     sig_log = pyqtSignal(str)
     sig_popup = pyqtSignal(str)
     sig_status = pyqtSignal(str, str)
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Update 29/8/2025")
+        self.setWindowTitle("Update 30/8/2025 - Fix Multiple Emulator Support")
         self.setWindowIcon(QIcon("logo.png"))
-        self.resize(280, 560)
-        self.stop_event = threading.Event()
+        self.resize(420, 640)
         self.workers = {}
+        self.device_stop_events = {}
+        self.device_buttons = {}
         main_layout = QVBoxLayout()
         main_layout.setSpacing(10)
         main_layout.setContentsMargins(6, 6, 6, 6)
         self.table = QTableWidget()
-        self.table.setColumnCount(3)
-        self.table.setHorizontalHeaderLabels(["#", "Device (ip:port)", "Status"])
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["#", "Device (ip:port)", "Status Log", "Controls", "Settings"])
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionsClickable(False)
         self.table.setStyleSheet("QTableWidget{border:1px solid gray;} QHeaderView::section{border:1px solid gray;background-color:#f0f0f0;} QTableWidget::item{border:1px solid gray;}")
         frame_emulator = QFrame()
         vbox_emulator = QVBoxLayout()
@@ -645,89 +762,50 @@ class MainWindow(QMainWindow):
         vbox_logs.addWidget(self.logs)
         frame_logs.setLayout(vbox_logs)
         main_layout.addWidget(frame_logs)
-        tabs = QTabWidget()
-        tabs.setStyleSheet("QTabWidget::pane{border:1px solid gray;} QTabBar::tab{padding:6px;}")
-        tab_control = QWidget()
-        layout_control = QVBoxLayout()
-        hbox_global = QHBoxLayout()
-        self.btn_open_game_global = QPushButton("Open Game (GB)")
-        self.btn_close_game_global = QPushButton("Close Game (GB)")
-        hbox_global.addWidget(self.btn_open_game_global)
-        hbox_global.addWidget(self.btn_close_game_global)
-        layout_control.addLayout(hbox_global)
-        hbox_vn = QHBoxLayout()
-        self.btn_open_game_vn = QPushButton("Open Game (VN)")
-        self.btn_close_game_vn = QPushButton("Close Game (VN)")
-        hbox_vn.addWidget(self.btn_open_game_vn)
-        hbox_vn.addWidget(self.btn_close_game_vn)
-        layout_control.addLayout(hbox_vn)
-        tab_control.setLayout(layout_control)
-        tabs.addTab(tab_control, "Game")
-        tab_fog = QWidget()
-        layout_fog = QVBoxLayout()
-        hbox_setup = QHBoxLayout()
-        self.btn_setup = QPushButton("Setup")
-        self.input_w = QLineEdit("960")
-        self.input_h = QLineEdit("540")
-        self.input_w.setFixedWidth(60)
-        self.input_h.setFixedWidth(60)
-        lbl_w = QLabel("W:")
-        lbl_h = QLabel("H:")
-        hbox_setup.addWidget(self.btn_setup)
-        hbox_setup.addWidget(lbl_w)
-        hbox_setup.addWidget(self.input_w)
-        hbox_setup.addWidget(lbl_h)
-        hbox_setup.addWidget(self.input_h)
-        hbox_setup.addStretch()
-        layout_fog.addLayout(hbox_setup)
-        self.chk_explore_fog = QCheckBox("Explore Fog")
-        self.chk_explore_caves = QCheckBox("Explore Caves")
-        self.chk_explore_other = QCheckBox("Explore Other")
-        self.chk_auto_reconnect = QCheckBox("Auto Reconnect")
-        self.chk_anti_ban = QCheckBox("Enable Anti-ban")
-        self.chk_captcha = QCheckBox("Captcha Alert")
-        self.chk_anti_ban.setChecked(True)
-        self.chk_captcha.setChecked(True)
-        layout_fog.addWidget(self.chk_explore_fog)
-        layout_fog.addWidget(self.chk_explore_caves)
-        layout_fog.addWidget(self.chk_explore_other)
-        layout_fog.addWidget(self.chk_auto_reconnect)
-        layout_fog.addWidget(self.chk_anti_ban)
-        layout_fog.addWidget(self.chk_captcha)
-        hbox_buttons = QHBoxLayout()
-        self.btn_start_fog = QPushButton("▶ Start")
-        self.btn_stop_fog = QPushButton("⏹ Stop")
-        hbox_buttons.addWidget(self.btn_start_fog)
-        hbox_buttons.addWidget(self.btn_stop_fog)
-        layout_fog.addLayout(hbox_buttons)
-        tab_fog.setLayout(layout_fog)
-        tabs.addTab(tab_fog, "Fog")
-        frame_tabs = QFrame()
-        vbox_tabs = QVBoxLayout()
-        vbox_tabs.setContentsMargins(0, 0, 0, 0)
-        vbox_tabs.addWidget(tabs)
-        frame_tabs.setLayout(vbox_tabs)
-        main_layout.addWidget(frame_tabs)
         container = QWidget()
         container.setLayout(main_layout)
         self.setCentralWidget(container)
-        self.btn_open_game_global.clicked.connect(lambda: self.launch_close_game("open", "com.lilithgame.roc.gp"))
-        self.btn_close_game_global.clicked.connect(lambda: self.launch_close_game("close", "com.lilithgame.roc.gp"))
-        self.btn_open_game_vn.clicked.connect(lambda: self.launch_close_game("open", "com.rok.gp.vn"))
-        self.btn_close_game_vn.clicked.connect(lambda: self.launch_close_game("close", "com.rok.gp.vn"))
-        self.btn_refresh = QPushButton("🔄", self.table)
-        self.btn_refresh.setFixedSize(28, 20)
+        
+        toolbar_layout = QHBoxLayout()
+        
+        self.btn_select_all = QPushButton("Select all")
+        self.btn_select_all.setFixedSize(100, 26)
+        self.btn_select_all.clicked.connect(self.select_all)
+        
+        self.btn_deselect_all = QPushButton("Deselect all")
+        self.btn_deselect_all.setFixedSize(100, 26)
+        self.btn_deselect_all.clicked.connect(self.deselect_all)
+        
+        self.btn_start_all = QPushButton("Start all")
+        self.btn_start_all.setFixedSize(100, 26)
+        self.btn_start_all.clicked.connect(self.start_all)
+        
+        self.btn_stop_all = QPushButton("Stop all")
+        self.btn_stop_all.setFixedSize(100, 26)
+        self.btn_stop_all.clicked.connect(self.stop_all)
+        
+        self.btn_refresh = QPushButton("🔃")
+        self.btn_refresh.setFixedSize(40, 26)
+        self.btn_refresh.setToolTip("Refresh device list")
         self.btn_refresh.clicked.connect(self.scan_and_connect)
-        header = self.table.horizontalHeader()
-        self.update_button_position()
-        header.sectionResized.connect(self.update_button_position)
-        header.geometriesChanged.connect(self.update_button_position)
-        self.btn_start_fog.clicked.connect(self.start_fog_logic)
-        self.btn_stop_fog.clicked.connect(self.stop_fog_logic)
-        self.btn_setup.clicked.connect(self.run_setup_for_selected)
+
+        toolbar_layout.addWidget(self.btn_select_all)
+        toolbar_layout.addWidget(self.btn_deselect_all)
+        toolbar_layout.addWidget(self.btn_start_all)
+        toolbar_layout.addWidget(self.btn_stop_all)
+        toolbar_layout.addWidget(self.btn_refresh)
+        toolbar_layout.addStretch()
+
+        toolbar_widget = QWidget()
+        toolbar_widget.setLayout(toolbar_layout)
+        
+        self.toolbar = self.addToolBar("main")
+        self.toolbar.addWidget(toolbar_widget)
+
         self.sig_log.connect(self.on_log)
         self.sig_popup.connect(self.on_captcha_popup)
         self.sig_status.connect(self.on_set_status)
+        self.scan_and_connect()
 
     def on_log(self, msg: str):
         now = time.strftime("%H:%M:%S")
@@ -735,7 +813,7 @@ class MainWindow(QMainWindow):
 
     def on_captcha_popup(self, dev: str):
         halted_devices.add(dev)
-        self.set_device_status(dev, "🛑 Captcha")
+        self.set_device_status(dev, "Captcha")
         QMessageBox.warning(self, "Captcha Detected", f"Device {dev} has triggered CAPTCHA.\nAll tasks on this device have been stopped.")
 
     def on_set_status(self, dev: str, status: str):
@@ -743,13 +821,6 @@ class MainWindow(QMainWindow):
 
     def log(self, msg: str):
         self.sig_log.emit(msg)
-
-    def update_button_position(self):
-        header = self.table.horizontalHeader()
-        x = header.sectionPosition(0) + (header.sectionSize(0) - self.btn_refresh.width()) // 2
-        y = (header.height() - self.btn_refresh.height()) // 2
-        self.btn_refresh.move(x, y)
-        self.btn_refresh.raise_()
 
     def get_selected_devices(self):
         devices = []
@@ -772,27 +843,39 @@ class MainWindow(QMainWindow):
                 self.table.setItem(row, 2, item_status)
                 break
 
-    def launch_close_game(self, action, pkg):
-        selected = self.get_selected_devices()
-        if not selected:
-            self.log("No devices selected!")
+    def select_all(self):
+        for row in range(self.table.rowCount()):
+            widget = self.table.cellWidget(row, 0)
+            if widget:
+                chk = widget.layout().itemAt(0).widget()
+                if chk:
+                    chk.setChecked(True)
+
+    def deselect_all(self):
+        for row in range(self.table.rowCount()):
+            widget = self.table.cellWidget(row, 0)
+            if widget:
+                chk = widget.layout().itemAt(0).widget()
+                if chk:
+                    chk.setChecked(False)
+
+    def start_all(self):
+        devices = self.get_selected_devices()
+        if not devices:
+            self.log("No devices selected to start.")
             return
-        for dev in selected:
-            try:
-                if dev in halted_devices:
-                    self.log(f"[{dev}] Blocked due to CAPTCHA.")
-                    continue
-                if action == "open":
-                    subprocess.run([ADB_PATH, "-s", dev, "shell", "monkey",
-                                    "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1"],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    self.log(f"Opened game ({pkg}) on {dev}")
-                else:
-                    subprocess.run([ADB_PATH, "-s", dev, "shell", "am", "force-stop", pkg],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    self.log(f"Closed game ({pkg}) on {dev}")
-            except Exception as e:
-                self.log(f"Error on {dev}: {e}")
+        for dev in devices:
+            self.start_device(dev)
+        self.log(f"Start signal sent to {len(devices)} device(s).")
+
+    def stop_all(self):
+        devices = self.get_selected_devices()
+        if not devices:
+            self.log("No devices selected to stop.")
+            return
+        for dev in devices:
+            self.stop_device(dev)
+        self.log(f"Stop signal sent to {len(devices)} device(s).")
 
     def scan_and_connect(self):
         try:
@@ -820,126 +903,132 @@ class MainWindow(QMainWindow):
                 self.table.setItem(row, 1, item_dev)
                 state = parsed.get(dev, "")
                 ok = (state == "device")
-                status_text = "🟢 Connected" if ok else "🔴 Error"
+                status_text = "Connected" if ok else "Error"
                 item_status = QTableWidgetItem(status_text)
                 item_status.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(row, 2, item_status)
+                btn_start = QPushButton("Start")
+                btn_start.setFixedSize(60, 22)
+                btn_stop = QPushButton("Stop")
+                btn_stop.setFixedSize(60, 22)
+                btn_settings = QPushButton("⚙️")
+                btn_settings.setFixedSize(60, 22)
+                btn_start.clicked.connect(lambda _, d=dev: self.start_device(d))
+                btn_stop.clicked.connect(lambda _, d=dev: self.stop_device(d))
+                btn_settings.clicked.connect(lambda _, d=dev: self.open_settings(d))
+                ctrl_layout = QHBoxLayout()
+                ctrl_layout.setContentsMargins(2, 2, 2, 2)
+                ctrl_layout.addWidget(btn_start)
+                ctrl_layout.addWidget(btn_stop)
+                ctrl_widget = QWidget()
+                ctrl_widget.setLayout(ctrl_layout)
+                self.table.setCellWidget(row, 3, ctrl_widget)
+                settings_layout = QHBoxLayout()
+                settings_layout.setContentsMargins(2, 2, 2, 2)
+                settings_layout.setAlignment(Qt.AlignCenter)
+                settings_layout.addWidget(btn_settings)
+                settings_widget = QWidget()
+                settings_widget.setLayout(settings_layout)
+                self.table.setCellWidget(row, 4, settings_widget)
                 if ok:
                     connected_devices.add(dev)
             self.log("Device list updated.")
         except Exception as e:
             self.log(f"Error scanning devices: {e}")
 
-    def run_setup_for_selected(self):
-        selected = self.get_selected_devices()
-        if not selected:
-            self.log("No device selected for Setup!")
+    def open_settings(self, dev: str):
+        if dev in halted_devices:
+            self.log(f"[{dev}] Blocked due to CAPTCHA.")
             return
-        try:
-            ref_w = max(200, int(self.input_w.text().strip()))
-            ref_h = max(200, int(self.input_h.text().strip()))
-        except Exception:
-            ref_w, ref_h = 960, 540
-            self.input_w.setText("960")
-            self.input_h.setText("540")
-        for dev in selected:
-            if dev in halted_devices:
-                self.log(f"[{dev}] Blocked due to CAPTCHA.")
-                continue
-            img = adb_screencap_img(dev)
-            if img is None:
-                self.log(f"[{dev}] Could not get a screenshot.")
-                continue
-            dlg = SetupDialog(dev, img, ref_w, ref_h, self)
-            if dlg.exec_() == QDialog.Accepted:
-                self.log(f"[{dev}] Coordinates saved.")
+        dlg = DeviceSettingsDialog(dev, self)
+        if dlg.exec_() == QDialog.Accepted:
+            self.log(f"[{dev}] Settings saved.")
 
-    def start_fog_logic(self):
-        selected = self.get_selected_devices()
-        if not selected:
-            self.log("No devices selected for Fog task!")
+    def start_device(self, dev: str):
+        if dev in halted_devices:
+            self.log(f"[{dev}] Blocked due to CAPTCHA.")
             return
-        if not (self.chk_explore_fog.isChecked() or self.chk_explore_caves.isChecked() or self.chk_explore_other.isChecked()):
-            self.log("No mode selected (Explore Fog/Caves/Other).")
+        if dev in self.workers and self.workers[dev].is_alive():
+            self.log(f"[{dev}] Worker already running.")
             return
-        self.stop_event.clear()
-        for dev in selected:
-            if dev in halted_devices:
-                self.log(f"[{dev}] Blocked due to CAPTCHA.")
-                continue
-            if dev in self.workers and self.workers[dev].is_alive():
-                continue
-            anti_ban_on = self.chk_anti_ban.isChecked()
-            reconnect_on = self.chk_auto_reconnect.isChecked()
-            captcha_on = self.chk_captcha.isChecked()
-            modes_on = {
-                "fog": self.chk_explore_fog.isChecked(),
-                "caves": self.chk_explore_caves.isChecked(),
-                "other": self.chk_explore_other.isChecked()
-            }
-            t = threading.Thread(target=self.run_worker, args=(dev, anti_ban_on, reconnect_on, captcha_on, modes_on), daemon=True)
-            t.start()
-            self.workers[dev] = t
-        self.log("Fog task started.")
+        cfg = load_device_configs().get(dev, {})
+        anti_ban_on = cfg.get("anti_ban", True)
+        reconnect_on = cfg.get("reconnect", True)
+        captcha_on = cfg.get("captcha", True)
+        modes_on = {"fog": cfg.get("fog", True), "caves": cfg.get("caves", False), "other": cfg.get("other", False)}
+        stop_event = threading.Event()
+        self.device_stop_events[dev] = stop_event
+        t = threading.Thread(target=self.run_worker, args=(dev, anti_ban_on, reconnect_on, captcha_on, modes_on, stop_event), daemon=True)
+        t.start()
+        self.workers[dev] = t
+        self.set_device_status(dev, "Running")
+        self.log(f"[{dev}] Worker started (per-device).")
 
-    def stop_fog_logic(self):
-        self.stop_event.set()
-        self.log("Fog task stopped.")
+    def stop_device(self, dev: str):
+        ev = self.device_stop_events.get(dev)
+        if not ev:
+            self.log(f"[{dev}] No running worker to stop.")
+            return
+        ev.set()
+        self.set_device_status(dev, "Stopping")
+        self.log(f"[{dev}] Stop signal sent.")
 
-    def run_worker(self, dev: str, anti_ban: bool, reconnect: bool, captcha_enabled: bool, modes: dict):
+    def run_worker(self, dev: str, anti_ban: bool, reconnect: bool, captcha_enabled: bool, modes: dict, stop_event: threading.Event):
         def lg(msg): self.log(msg)
         def captcha_notify(d):
             self.sig_log.emit(f"[{d}] CAPTCHA detected. Stopping device tasks.")
             self.sig_popup.emit(d)
         lg(f"[{dev}] Worker started. Anti-ban: {'ON' if anti_ban else 'OFF'}")
-        while not self.stop_event.is_set():
+        while not stop_event.is_set():
             if dev in halted_devices:
                 break
             try:
-                if captcha_enabled and do_captcha_check(dev, lg, self.stop_event):
+                if captcha_enabled and do_captcha_check(dev, lg, stop_event):
                     captcha_notify(dev)
                     break
                 if reconnect:
-                    if do_reconnect_if_needed(dev, lg, self.stop_event, anti_ban):
-                        if self.stop_event.is_set() or dev in halted_devices:
+                    if do_reconnect_if_needed(dev, lg, stop_event, anti_ban):
+                        if stop_event.is_set() or dev in halted_devices:
                             break
                 mode_list = [
-                    ("fog", modes["fog"]),
-                    ("caves", modes["caves"]),
-                    ("other", modes["other"]),
+                    ("fog", modes.get("fog", False)),
+                    ("caves", modes.get("caves", False)),
+                    ("other", modes.get("other", False)),
                 ]
                 selected_modes = [m for m, on in mode_list if on]
                 if not selected_modes:
-                    if self.stop_event.wait(1.0):
+                    if stop_event.wait(1.0):
                         break
                     continue
                 only_this_mode = lambda name: (selected_modes == [name])
                 other_selected = lambda name: (len(selected_modes) > 1)
                 done = False
                 for name, is_on in mode_list:
-                    if self.stop_event.is_set() or dev in halted_devices:
+                    if stop_event.is_set() or dev in halted_devices:
                         break
                     if not is_on:
                         continue
                     lg(f"[{dev}] Running mode: Explore {name.capitalize()}")
                     if name == "fog":
-                        done = logic_explore_fog(dev, lg, only_this_mode("fog"), other_selected("fog"), self.stop_event, anti_ban, captcha_enabled, captcha_notify)
+                        done = logic_explore_fog(dev, lg, only_this_mode("fog"), other_selected("fog"), stop_event, anti_ban, captcha_enabled, captcha_notify)
                     elif name == "caves":
-                        done = logic_explore_caves(dev, lg, only_this_mode("caves"), other_selected("caves"), self.stop_event, anti_ban, captcha_enabled, captcha_notify)
+                        done = logic_explore_caves(dev, lg, only_this_mode("caves"), other_selected("caves"), stop_event, anti_ban, captcha_enabled, captcha_notify)
                     elif name == "other":
-                        done = logic_explore_other(dev, lg, only_this_mode("other"), other_selected("other"), self.stop_event, anti_ban, captcha_enabled, captcha_notify)
+                        done = logic_explore_other(dev, lg, only_this_mode("other"), other_selected("other"), stop_event, anti_ban, captcha_enabled, captcha_notify)
                     if dev in halted_devices:
                         break
-                    if done or self.stop_event.is_set():
+                    if done or stop_event.is_set():
                         break
                 if dev in halted_devices:
                     break
-                if self.stop_event.wait(0.5):
+                if stop_event.wait(0.5):
                     break
             except Exception as e:
                 lg(f"[{dev}] Worker error: {e}")
-                if self.stop_event.wait(1.0):
+                if stop_event.wait(1.0):
                     break
+        self.set_device_status(dev, "Stopped")
+        self.log(f"[{dev}] Worker terminated.")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
