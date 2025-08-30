@@ -722,7 +722,7 @@ class MainWindow(QMainWindow):
     sig_status = pyqtSignal(str, str)
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Update 30/8/2025 - Fix Multiple Emulator Support")
+        self.setWindowTitle("Update 30/8/2025 - Multiple Emulator Support")
         self.setWindowIcon(QIcon("logo.png"))
         self.resize(420, 640)
         self.workers = {}
@@ -1035,3 +1035,4 @@ if __name__ == "__main__":
     win = MainWindow()
     win.show()
     sys.exit(app.exec_())
+
