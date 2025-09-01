@@ -512,7 +512,7 @@ def logic_explore_other(dev: str, log_fn, only_this_mode: bool, other_modes_sele
             log_fn(f"[{dev}] 'Go' button not found, waiting longer...")
             pos_go = wait_for_template(dev, "go.png", timeout=20.0, stop_event=stop_event)
             if not pos_go:
-                log_fn(f"[{dev}] 'Go' button still not found.")
+                log_fn(f"[{dev}] 'Go' not found.")
                 return False
         else:
             if other_modes_selected:
@@ -531,86 +531,7 @@ def logic_explore_other(dev: str, log_fn, only_this_mode: bool, other_modes_sele
 
 
 def logic_explore_caves(dev: str, log_fn, only_this_mode: bool, other_modes_selected: bool, stop_event: threading.Event, anti_ban: bool, captcha_enabled: bool, captcha_notify):
-    reset_to_home(dev, log_fn, stop_event, anti_ban)
-    if stop_event.is_set():
-        return False
-    if captcha_enabled and do_captcha_check(dev, log_fn, stop_event):
-        captcha_notify(dev)
-        return True
-    if not go_to_coord_and_scout(dev, log_fn, stop_event, anti_ban):
-        return False
-    if captcha_enabled and do_captcha_check(dev, log_fn, stop_event):
-        captcha_notify(dev)
-        return True
-    pos_caves = wait_for_template(dev, "caves.png", timeout=8.0, stop_event=stop_event)
-    if not pos_caves:
-        log_fn(f"[{dev}] 'Caves' button not found.")
-        if other_modes_selected:
-            try_exit(dev, log_fn, stop_event, anti_ban, timeout=4.0)
-        return False
-    perform_tap(dev, *pos_caves, anti_ban)
-    if wait_or_stop(stop_event, get_delay(anti_ban)):
-        return False
-    if captcha_enabled and do_captcha_check(dev, log_fn, stop_event):
-        captcha_notify(dev)
-        return True
-    pos_go = wait_for_template(dev, "go.png", timeout=8.0, stop_event=stop_event)
-    if not pos_go:
-        if only_this_mode:
-            log_fn(f"[{dev}] Caves: 'Go' button not found, waiting longer...")
-            pos_go = wait_for_template(dev, "go.png", timeout=20.0, stop_event=stop_event)
-            if not pos_go:
-                log_fn(f"[{dev}] Caves: 'Go' button still not found.")
-                return False
-        else:
-            if other_modes_selected:
-                log_fn(f"[{dev}] Caves: 'Go' not found. Exiting current panel and skipping to next mode.")
-                try_exit(dev, log_fn, stop_event, anti_ban, timeout=4.0)
-                click_center(dev, log_fn, stop_event, anti_ban)
-                return False
-            else:
-                return False
-    perform_tap(dev, *pos_go, anti_ban)
-    if wait_or_stop(stop_event, get_delay(anti_ban)):
-        return False
-    if captcha_enabled and do_captcha_check(dev, log_fn, stop_event):
-        captcha_notify(dev)
-        return True
-    if not ensure_selected(dev, log_fn, stop_event, anti_ban):
-        log_fn(f"[{dev}] Caves: Could not select troops.")
-        return False
-    if stop_event.is_set():
-        return False
-    pos_invest = wait_for_template(dev, "investigate.png", timeout=8.0, stop_event=stop_event)
-    if not pos_invest:
-        log_fn(f"[{dev}] 'Investigate' button not found.")
-        if other_modes_selected:
-            try_exit(dev, log_fn, stop_event, anti_ban, timeout=4.0)
-        return False
-    perform_tap(dev, *pos_invest, anti_ban)
-    if wait_or_stop(stop_event, get_delay(anti_ban)):
-        return False
-    res = wait_for_any_template(dev, ["sleep.png", "back.png", "camp.png"], timeout=12.0, stop_event=stop_event)
-    if not res:
-        log_fn(f"[{dev}] Did not find sleep/back/camp buttons.")
-        if other_modes_selected:
-            try_exit(dev, log_fn, stop_event, anti_ban, timeout=4.0)
-        return False
-    name, pos = res
-    perform_tap(dev, *pos, anti_ban)
-    if wait_or_stop(stop_event, get_delay(anti_ban)):
-        return False
-    if captcha_enabled and do_captcha_check(dev, log_fn, stop_event):
-        captcha_notify(dev)
-        return True
-    pos_send = wait_for_template(dev, "send.png", timeout=8.0, stop_event=stop_event)
-    if pos_send:
-        perform_tap(dev, *pos_send, anti_ban)
-        if wait_or_stop(stop_event, get_delay(anti_ban)):
-            return False
-        log_fn(f"[{dev}] Caves: Sent troops.")
-        return True
-    log_fn(f"[{dev}] Caves: 'Send' button not found.")
+    log_fn(f"[{dev}] Caves feature is currently under maintenance. Skipping Caves mode.")
     return False
 
 class ClickableLabel(QLabel):
@@ -673,7 +594,9 @@ class DeviceSettingsDialog(QDialog):
         self.setMinimumSize(360, 320)
         vbox = QVBoxLayout()
         self.chk_fog = QCheckBox("Explore Fog")
-        self.chk_caves = QCheckBox("Explore Caves")
+        self.chk_caves = QCheckBox("Explore Caves (Maintenance)")
+        self.chk_caves.setChecked(False)
+        self.chk_caves.setEnabled(False)
         self.chk_other = QCheckBox("Explore Other")
         self.chk_reconnect = QCheckBox("Auto Reconnect")
         self.chk_anti = QCheckBox("Enable Anti-ban")
@@ -725,7 +648,8 @@ class DeviceSettingsDialog(QDialog):
     def load(self):
         cfg = load_device_configs().get(self.dev, {})
         self.chk_fog.setChecked(cfg.get("fog", True))
-        self.chk_caves.setChecked(cfg.get("caves", False))
+        self.chk_caves.setChecked(False)
+        self.chk_caves.setEnabled(False)
         self.chk_other.setChecked(cfg.get("other", False))
         self.chk_reconnect.setChecked(cfg.get("reconnect", True))
         self.chk_anti.setChecked(cfg.get("anti_ban", True))
@@ -765,7 +689,7 @@ class DeviceSettingsDialog(QDialog):
             pause_minutes = 10
         data[self.dev] = {
             "fog": bool(self.chk_fog.isChecked()),
-            "caves": bool(self.chk_caves.isChecked()),
+            "caves": False,
             "other": bool(self.chk_other.isChecked()),
             "reconnect": bool(self.chk_reconnect.isChecked()),
             "anti_ban": bool(self.chk_anti.isChecked()),
@@ -1018,7 +942,7 @@ class MainWindow(QMainWindow):
         anti_ban_on = cfg.get("anti_ban", True)
         reconnect_on = cfg.get("reconnect", True)
         captcha_on = cfg.get("captcha", True)
-        modes_on = {"fog": cfg.get("fog", True), "caves": cfg.get("caves", False), "other": cfg.get("other", False)}
+        modes_on = {"fog": cfg.get("fog", True), "caves": False, "other": cfg.get("other", False)}
         auto_pause = cfg.get("auto_pause", False)
         run_minutes = cfg.get("run_minutes", 30)
         pause_minutes = cfg.get("pause_minutes", 10)
@@ -1121,5 +1045,3 @@ if __name__ == "__main__":
     win = MainWindow()
     win.show()
     sys.exit(app.exec_())
-
-
