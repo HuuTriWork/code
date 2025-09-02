@@ -37,7 +37,6 @@ THRESHOLDS = {
     "exit.png": 0.85,
     "send.png": 0.85,
     "other.png": 0.85,
-    "caves.png": 0.85,
     "go.png": 0.85,
     "investigate.png": 0.85,
     "sleep.png": 0.88,
@@ -530,16 +529,13 @@ def logic_explore_other(dev: str, log_fn, only_this_mode: bool, other_modes_sele
     return True
 
 
-def logic_explore_caves(dev: str, log_fn, only_this_mode: bool, other_modes_selected: bool, stop_event: threading.Event, anti_ban: bool, captcha_enabled: bool, captcha_notify):
-    log_fn(f"[{dev}] Caves feature is currently under maintenance. Skipping Caves mode.")
-    return False
-
 class ClickableLabel(QLabel):
     clicked = pyqtSignal(int, int)
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self.clicked.emit(int(event.pos().x()), int(event.pos().y()))
         super().mousePressEvent(event)
+
 
 class SetupDialog(QDialog):
     def __init__(self, dev: str, native_img: np.ndarray, ref_w: int, ref_h: int, parent=None):
@@ -586,6 +582,7 @@ class SetupDialog(QDialog):
         if save_coords(data):
             self.accept()
 
+
 class DeviceSettingsDialog(QDialog):
     def __init__(self, dev: str, parent=None):
         super().__init__(parent)
@@ -594,9 +591,6 @@ class DeviceSettingsDialog(QDialog):
         self.setMinimumSize(360, 320)
         vbox = QVBoxLayout()
         self.chk_fog = QCheckBox("Explore Fog")
-        self.chk_caves = QCheckBox("Explore Caves (Maintenance)")
-        self.chk_caves.setChecked(False)
-        self.chk_caves.setEnabled(False)
         self.chk_other = QCheckBox("Explore Other")
         self.chk_reconnect = QCheckBox("Auto Reconnect")
         self.chk_anti = QCheckBox("Enable Anti-ban")
@@ -626,7 +620,6 @@ class DeviceSettingsDialog(QDialog):
         hbox_pause.addWidget(self.input_pause)
         hbox_pause.addStretch()
         vbox.addWidget(self.chk_fog)
-        vbox.addWidget(self.chk_caves)
         vbox.addWidget(self.chk_other)
         vbox.addWidget(self.chk_reconnect)
         vbox.addWidget(self.chk_anti)
@@ -648,8 +641,6 @@ class DeviceSettingsDialog(QDialog):
     def load(self):
         cfg = load_device_configs().get(self.dev, {})
         self.chk_fog.setChecked(cfg.get("fog", True))
-        self.chk_caves.setChecked(False)
-        self.chk_caves.setEnabled(False)
         self.chk_other.setChecked(cfg.get("other", False))
         self.chk_reconnect.setChecked(cfg.get("reconnect", True))
         self.chk_anti.setChecked(cfg.get("anti_ban", True))
@@ -689,7 +680,6 @@ class DeviceSettingsDialog(QDialog):
             pause_minutes = 10
         data[self.dev] = {
             "fog": bool(self.chk_fog.isChecked()),
-            "caves": False,
             "other": bool(self.chk_other.isChecked()),
             "reconnect": bool(self.chk_reconnect.isChecked()),
             "anti_ban": bool(self.chk_anti.isChecked()),
@@ -712,13 +702,14 @@ class DeviceSettingsDialog(QDialog):
             pass
         self.accept()
 
+
 class MainWindow(QMainWindow):
     sig_log = pyqtSignal(str)
     sig_popup = pyqtSignal(str)
     sig_status = pyqtSignal(str, str)
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Update 31/8/2025")
+        self.setWindowTitle("Update 2/9/2025 ")
         self.setWindowIcon(QIcon("logo.png"))
         self.resize(420, 640)
         self.workers = {}
@@ -942,7 +933,7 @@ class MainWindow(QMainWindow):
         anti_ban_on = cfg.get("anti_ban", True)
         reconnect_on = cfg.get("reconnect", True)
         captcha_on = cfg.get("captcha", True)
-        modes_on = {"fog": cfg.get("fog", True), "caves": False, "other": cfg.get("other", False)}
+        modes_on = {"fog": cfg.get("fog", True), "other": cfg.get("other", False)}
         auto_pause = cfg.get("auto_pause", False)
         run_minutes = cfg.get("run_minutes", 30)
         pause_minutes = cfg.get("pause_minutes", 10)
@@ -984,7 +975,6 @@ class MainWindow(QMainWindow):
                             break
                 mode_list = [
                     ("fog", modes.get("fog", False)),
-                    ("caves", modes.get("caves", False)),
                     ("other", modes.get("other", False)),
                 ]
                 selected_modes = [m for m, on in mode_list if on]
@@ -1012,8 +1002,6 @@ class MainWindow(QMainWindow):
                     lg(f"[{dev}] Running mode: Explore {name.capitalize()}")
                     if name == "fog":
                         done = logic_explore_fog(dev, lg, only_this_mode("fog"), other_selected("fog"), stop_event, anti_ban, captcha_enabled, captcha_notify)
-                    elif name == "caves":
-                        done = logic_explore_caves(dev, lg, only_this_mode("caves"), other_selected("caves"), stop_event, anti_ban, captcha_enabled, captcha_notify)
                     elif name == "other":
                         done = logic_explore_other(dev, lg, only_this_mode("other"), other_selected("other"), stop_event, anti_ban, captcha_enabled, captcha_notify)
                     if dev in halted_devices:
@@ -1039,6 +1027,7 @@ class MainWindow(QMainWindow):
                     break
         self.sig_status.emit(dev, "Stopped")
         self.log(f"[{dev}] Worker terminated.")
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
